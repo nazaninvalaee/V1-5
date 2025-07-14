@@ -8,9 +8,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from skimage.transform import resize
 import random
-
-# Import augmentation functions from preprocessing.py
-from Dataset.preprocessing import reduce_2d, flip, blur  
+from preprocessing import reduce_2d, flip, blur  
 
 # --- Preprocess a Single 2D Slice ---
 def preprocess_slice(img_slice_2d, label_slice_2d):
