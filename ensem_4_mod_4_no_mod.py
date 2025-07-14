@@ -1,6 +1,6 @@
 from tensorflow.keras import models, layers
 from tensorflow.keras.layers import Add, Multiply
-from Models import layer_4_mod, layer_4_no_mod
+import layer_4_mod, layer_4_no_mod
 
 
 def channel_attention(input_feature, ratio=8):
