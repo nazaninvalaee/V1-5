@@ -47,8 +47,9 @@ def apply_augmentations(img, label):
 
 # --- Prepare List of Input/Output Filepaths ---
 def prepare_filepaths(path1, path2, n):
-    # ... (function body remains the same) ...
-    # [Rest of the prepare_filepaths function code]
+    """
+    Prepares a list of (input_path, label_path) tuples.
+    """
     input_files = sorted(os.listdir(path1))
     label_files = sorted(os.listdir(path2))
 
@@ -56,15 +57,25 @@ def prepare_filepaths(path1, path2, n):
     
     # Iterate through input files and match with corresponding label files
     for input_file in input_files[:n]:
-        # Assuming label files have a _dseg suffix before the extension
+        # Identify the base name, removing the '.nii.gz' and the '_T2w' part, 
+        # as the label file does not include '_T2w'.
         base_name = input_file.replace('.nii.gz', '')
-        label_file = base_name + '_dseg.nii.gz'
+        
+        # Remove the '_T2w' identifier from the base name if present
+        if '_T2w' in base_name:
+            label_base_name = base_name.replace('_T2w', '')
+        else:
+            label_base_name = base_name
+        
+        # Construct the expected label file name
+        label_file = label_base_name + '_dseg.nii.gz'
 
         if label_file in label_files:
             input_path = os.path.join(path1, input_file)
             label_path = os.path.join(path2, label_file)
             filepaths.append((input_path, label_path))
         else:
+            # Print the warning message for files not found
             print(f"Warning: Label file {label_file} not found for {input_file}")
 
     return filepaths
