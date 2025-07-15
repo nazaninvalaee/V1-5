@@ -174,22 +174,36 @@ def create_tf_dataset(filepaths_list, batch_size, is_training, slices_per_volume
     return dataset
 
 # --- Helper function for slice counting (from original file) ---
-def count_slices_in_filepaths(filepaths_list, slices_per_volume):
+def count_slices_in_filepaths(filepaths_list, slices_per_volume=None):
     """
-    Counts the total number of slices that will be processed.
+    Counts the total number of slices that will be processed from the given filepaths,
+    aligning with the logic in _data_generator.
+
+    Args:
+        filepaths_list (list): List of (input_path, label_path) tuples.
+        slices_per_volume (int, optional): Max slices to take per volume (e.g., 50).
+                                           If None, counts all slices in the original volume.
+
+    Returns:
+        int: Total slice count.
     """
     total_slices = 0
-    for img_path, _ in filepaths_list:
+    for img_path, _ in tqdm(filepaths_list, desc="Counting Slices", ncols=75, leave=False):
         try:
-            # We assume 3 anatomical planes (3 * slices_per_volume) for each volume
-            if slices_per_volume and slices_per_volume > 0:
-                total_slices += slices_per_volume * 3
+            # Load volume header to get shape without loading full data
+            header = nib.load(img_path).header
+            num_slices_in_volume = header.get_data_shape()[2] # Assuming slices are along axis 2
+
+            if slices_per_volume is not None and slices_per_volume > 0:
+                # _data_generator takes min(actual_slices, slices_per_volume)
+                effective_slices = min(num_slices_in_volume, slices_per_volume)
+                total_slices += effective_slices
             else:
-                volume = nib.load(img_path).get_fdata()
-                total_slices += sum(volume.shape)
-                del volume
-                gc.collect()
+                # If slices_per_volume is None, _data_generator processes all original slices
+                total_slices += num_slices_in_volume
+
         except Exception as e:
+            print(f"Warning: Could not count slices for {img_path}: {e}")
             continue
     return total_slices
 
