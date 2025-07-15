@@ -33,35 +33,16 @@ brain_parts_names = [
 # --- 1. Load the Model ---
 print("\n--- Loading Model ---")
 try:
-    # We need to reload the model architecture, but since we modified the models 
-    # to include BatchNormalization, we need to load using the custom objects or 
-    # reload the modified model definition if 'Model.keras' was saved after changes.
-    # For this demonstration, we'll assume the provided 'Model.keras' is loadable.
-    
-    # If the combined loss was used, the model may need custom loss functions 
-    # during loading if the model was saved with a custom loss.
-    
-    # Since the user's provided training script saved the full model and weights, 
-    # we'll try to load the full model. If the model was saved *after* BN was added, 
-    # this should work.
-    
     model = tf.keras.models.load_model(model_path)
     print("Model loaded successfully from Model.keras.")
 except Exception as e:
-    # If the model cannot be loaded (e.g., if custom objects are missing or the 
-    # file path is wrong), we should try reloading the model architecture 
-    # and loading the weights.
     print(f"Error loading model directly from {model_path}: {e}")
-    print("Attempting to load architecture from Models.ensem_4_mod_4_no_mod and weights...")
+    print("Attempting to load architecture from ensem_4_mod_4_no_mod and weights...")
     
-    # This assumes the user has already run the training script and the updated
-    # model files (with BatchNormalization) and weights are available.
     try:
-        from Models.ensem_4_mod_4_no_mod import create_model
+        from ensem_4_mod_4_no_mod import create_model
         model = create_model(dropout_rate=0.2)
         
-        # We assume the weights were saved to: 
-        # '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
         weights_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
         model.load_weights(weights_path)
         print("Model loaded using architecture definition and weights.")
