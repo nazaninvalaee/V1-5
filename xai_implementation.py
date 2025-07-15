@@ -16,7 +16,7 @@ path1 = '/content/drive/MyDrive/feta_2.1/nii_files_input'
 path2 = '/content/drive/MyDrive/feta_2.1/nii_files_output'
 # Assuming model_path is '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/Model.keras' 
 # based on the training script's output
-model_path = '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/Model.keras' 
+model_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/Model.keras' 
 NUM_SLICES_PER_VOLUME = 50
 
 brain_parts_names = [
@@ -62,7 +62,7 @@ except Exception as e:
         
         # We assume the weights were saved to: 
         # '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
-        weights_path = '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
+        weights_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
         model.load_weights(weights_path)
         print("Model loaded using architecture definition and weights.")
         
