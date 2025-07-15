@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
-import os
+import os # Ensure this import is present
 from sklearn.model_selection import train_test_split
 import ensem_4_mod_4_no_mod
 import create_dataset as cd
@@ -14,9 +14,9 @@ print("--- Initializing Configuration ---")
 
 path1 = '/content/drive/MyDrive/feta_2.1/nii_files_input'
 path2 = '/content/drive/MyDrive/feta_2.1/nii_files_output'
-# Assuming model_path is '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/Model.keras' 
+# Assuming model_path is '/content/drive/MyDrive/fetal-brain-attencertain/checkpoints/Model.keras'
 # based on the training script's output
-model_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/Model.keras' 
+model_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/Model.keras'
 NUM_SLICES_PER_VOLUME = 50
 
 brain_parts_names = [
@@ -38,15 +38,15 @@ try:
 except Exception as e:
     print(f"Error loading model directly from {model_path}: {e}")
     print("Attempting to load architecture from ensem_4_mod_4_no_mod and weights...")
-    
+
     try:
         from ensem_4_mod_4_no_mod import create_model
         model = create_model(dropout_rate=0.2)
-        
+
         weights_path = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/trained_ensemble_weights_with_dropout.weights.h5'
         model.load_weights(weights_path)
         print("Model loaded using architecture definition and weights.")
-        
+
     except Exception as e:
         print(f"Failed to load model architecture and weights: {e}")
         exit()
@@ -63,7 +63,7 @@ for layer in reversed(model.layers):
 if target_layer_name:
     print(f"Using '{target_layer_name}' as the Grad-CAM target layer.")
 else:
-    target_layer_name = 'gradcam_target_conv'  # fallback
+    target_layer_name = 'gradcam_target_conv' # fallback
     try:
         _ = model.get_layer(target_layer_name)
         print(f"Using default target_layer_name: '{target_layer_name}'")
@@ -92,14 +92,14 @@ def generate_grad_cam(input_image_batch, model, target_layer_name, target_class_
 
     # Compute gradients of the target class output with respect to the conv layer output
     grads = tape.gradient(target_output_sum, conv_output)
-    
+
     # Global average pooling of gradients across spatial dimensions
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    
+
     # Multiply the pooled gradients by the feature map activations
     heatmap = conv_output[0] @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
-    
+
     # Apply ReLU to the heatmap (only positive activations contribute)
     heatmap = tf.maximum(heatmap, 0)
 
@@ -133,11 +133,11 @@ test_dataset = cd.create_tf_dataset(
 def calculate_jaccard_similarity(mask1, mask2, smooth=1e-6):
     """
     Calculates the Jaccard Index (IoU) between two binary masks.
-    
+
     Args:
         mask1 (np.ndarray): Binary mask 1.
         mask2 (np.ndarray): Binary mask 2.
-    
+
     Returns:
         float: Jaccard Index.
     """
@@ -146,8 +146,9 @@ def calculate_jaccard_similarity(mask1, mask2, smooth=1e-6):
     return (intersection + smooth) / (union + smooth)
 
 # --- Visualization Function (Modified to include metrics) ---
-def plot_grad_cam_results(original_image, true_mask, predicted_mask, heatmap, brain_part_name, jaccard_score):
-    
+# Added sample_id parameter to generate unique filenames
+def plot_grad_cam_results(original_image, true_mask, predicted_mask, heatmap, brain_part_name, jaccard_score, sample_id):
+
     # Create the figure and axes
     fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
@@ -171,13 +172,29 @@ def plot_grad_cam_results(original_image, true_mask, predicted_mask, heatmap, br
     # Grad-CAM Heatmap (overlay with transparency)
     im3 = axes[3].imshow(original_image, cmap='gray')
     im4 = axes[3].imshow(heatmap, cmap='jet', alpha=0.6)
-    
+
     # Add title with the Jaccard score for the heatmap alignment
     axes[3].set_title(f'Grad-CAM for {brain_part_name}\nHeatmap-GT Jaccard: {jaccard_score:.4f}')
     axes[3].axis('off')
 
     plt.tight_layout()
-    plt.show()
+
+    # --- ADDED: Code to save the figure ---
+    output_dir = 'grad_cam_outputs' # Directory to save images
+    os.makedirs(output_dir, exist_ok=True) # Create the directory if it doesn't exist
+
+    # Create a unique filename
+    # Sanitize brain_part_name for filename use
+    safe_brain_part_name = brain_part_name.replace(' ', '_').replace('/', '_')
+    file_name = f"grad_cam_sample_{sample_id}_class_{safe_brain_part_name}.png"
+    save_path = os.path.join(output_dir, file_name)
+
+    plt.savefig(save_path)
+    print(f"Saved Grad-CAM plot to: {save_path}")
+
+    # --- END ADDED CODE ---
+
+    # Close the figure to free up memory, important when generating many plots
     plt.close(fig)
 
 # --- Main Visualization Loop (Modified to calculate and pass Jaccard) ---
@@ -204,14 +221,14 @@ while found_samples < NUM_SAMPLES_TO_VISUALIZE and iteration_count < MAX_ITERATI
 
         # Determine class for Grad-CAM
         target_class_idx = None
-        
+
         # Prefer the first non-zero class in the true mask for relevance
         unique_true_classes = np.unique(true_mask)
         for cls in unique_true_classes:
             if cls != 0:
                 target_class_idx = int(cls)
                 break
-        
+
         # If no target class found in ground truth (shouldn't happen if we passed the check above, but as a fallback)
         if target_class_idx is None:
             unique_predicted_classes = np.unique(predicted_mask)
@@ -219,7 +236,7 @@ while found_samples < NUM_SAMPLES_TO_VISUALIZE and iteration_count < MAX_ITERATI
                 if cls != 0:
                     target_class_idx = int(cls)
                     break
-        
+
         if target_class_idx is None:
             target_class_idx = 2  # fallback to Gray Matter
 
@@ -233,25 +250,26 @@ while found_samples < NUM_SAMPLES_TO_VISUALIZE and iteration_count < MAX_ITERATI
         # --- Quantitative XAI Analysis ---
         # 1. Create binary mask for the target class from the true mask
         target_true_mask = (true_mask == target_class_idx).astype(np.float32)
-        
+
         # 2. Threshold the heatmap to create a binary mask of "activated regions"
-        # We can use a simple threshold (e.g., 0.5) or a percentile threshold. 
+        # We can use a simple threshold (e.g., 0.5) or a percentile threshold.
         # A threshold of 0.5 is a common starting point for binary interpretation of Grad-CAM.
         heatmap_mask = (heatmap > 0.5).astype(np.float32)
-        
+
         # 3. Calculate Jaccard similarity between the heatmap mask and the target true mask
         heatmap_jaccard = calculate_jaccard_similarity(heatmap_mask, target_true_mask)
         # ---------------------------------
 
         print(f"Sample {found_samples + 1}: Grad-CAM for {brain_parts_names[target_class_idx]}")
-        
+
         plot_grad_cam_results(
             input_image,
             true_mask,
             predicted_mask,
             heatmap,
             brain_parts_names[target_class_idx],
-            heatmap_jaccard  # Pass the calculated Jaccard score to the plotting function
+            heatmap_jaccard,
+            found_samples + 1 # Pass the current sample ID for unique filenames
         )
 
         found_samples += 1
