@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import cv2
 import os
 from sklearn.model_selection import train_test_split
-from Models import ensem_4_mod_4_no_mod
-import Dataset.create_dataset as cd
+import ensem_4_mod_4_no_mod
+import create_dataset as cd
 from tensorflow.keras import backend as K
 import gc
 
