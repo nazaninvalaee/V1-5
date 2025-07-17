@@ -1,5 +1,4 @@
-# In Models/ensem_4_mod_4_no_mod.py
-
+import tensorflow as tf
 from tensorflow.keras import models, layers
 from tensorflow.keras.layers import Add, Multiply
 import layer_4_mod, layer_4_no_mod
@@ -19,8 +18,8 @@ def channel_attention(input_feature, ratio=8):
     """
     channel = input_feature.shape[-1]
 
-    shared_layer_one = layers.Dense(channel // ratio, activation='relu', use_bias=False)
-    shared_layer_two = layers.Dense(channel, activation='sigmoid', use_bias=False)
+    shared_layer_one = layers.Dense(channel // ratio, activation='relu', use_bias=False, name='channel_attention_dense1')
+    shared_layer_two = layers.Dense(channel, activation='sigmoid', use_bias=False, name='channel_attention_dense2')
 
     avg_pool = layers.GlobalAveragePooling2D()(input_feature)
     avg_pool = layers.Reshape((1, 1, channel))(avg_pool)
@@ -31,15 +30,15 @@ def channel_attention(input_feature, ratio=8):
     max_pool = shared_layer_two(shared_layer_one(max_pool))
 
     cbam_feature = Add()([avg_pool, max_pool])
-    cbam_feature = Multiply()([input_feature, cbam_feature])
+    attention_mechanism_output = Multiply(name='ensemble_channel_attention_output')([input_feature, cbam_feature])
 
-    return cbam_feature
+    return attention_mechanism_output
 
 
-def create_model(dropout_rate=0.2, num_classes=8, return_attention_map=False): # Added new parameter
+def create_model(dropout_rate=0.2, num_classes=8, return_attention_map=False):
     """
     Creates a dual-branch ensemble model combining two backbone architectures
-    and applying channel attention before final classification.
+     and applying channel attention before final classification.
 
     Args:
         dropout_rate (float): Dropout rate for each sub-model.
@@ -60,21 +59,21 @@ def create_model(dropout_rate=0.2, num_classes=8, return_attention_map=False): #
 
     conc1 = layers.Concatenate()([out1, out2])
     
-    # Store the output of the channel attention layer before it's used further
-    ensemble_attention_output = channel_attention(conc1) #
+    ensemble_attention_output = channel_attention(conc1)
     
-    # Continue the normal flow with the attention-weighted features
-    conc1_attended = ensemble_attention_output
+    attended_features = ensemble_attention_output
 
-    conv2_for_gradcam = layers.Conv2D(16, 3, activation='relu', padding='same', name='gradcam_target_conv')(conc1_attended)
+    conv2_for_gradcam = layers.Conv2D(16, 3, activation='relu', padding='same', name='gradcam_target_conv')(attended_features)
     conv2_output = layers.Conv2D(16, 3, activation='relu', padding='same')(conv2_for_gradcam)
 
-    outp1 = layers.Conv2D(num_classes, 1, activation='softmax', padding='same')(conv2_output)
+    logits_output = layers.Conv2D(num_classes, 1, padding='same', name='logits_output')(conv2_output) 
+    final_output_softmax = layers.Activation('softmax', name='segmentation_output')(logits_output)
+
+    outputs = [final_output_softmax, logits_output]
 
     if return_attention_map:
-        # If requested, return both the final segmentation and the attention map
-        model = models.Model(inputs=inp, outputs=[outp1, ensemble_attention_output])
-    else:
-        model = models.Model(inputs=inp, outputs=outp1)
-    
+        outputs.append(ensemble_attention_output)
+
+    model = models.Model(inputs=inp, outputs=outputs)
+        
     return model
