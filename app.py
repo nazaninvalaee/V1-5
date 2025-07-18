@@ -256,8 +256,8 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     segmentation_output_softmax, _, averaged_attention_map_raw = full_model_with_attention(input_image_batch)
     predicted_mask_full = np.argmax(segmentation_output_softmax.numpy().squeeze(), axis=-1)
     
-    predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.float32)
-    gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.float32)
+    gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
+    predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
 
     # Calculate metrics
     seg_jaccard = jaccard_index(predicted_mask_for_class, gt_mask_for_class)
@@ -265,9 +265,9 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     status = f"Segmentation Jaccard: {seg_jaccard:.3f} | GT Pixels: {int(gt_pixel_count)} | Status: {'🚨 Problematic' if seg_jaccard < POOR_PERFORMANCE_JACCARD_THRESHOLD else '✅ Good Performance'}"
 
     # Prepare base images for display
-    original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze()) # Convert to 0-255 for Gradio
-    gt_mask_display = np.uint8(255 * gt_mask_for_class)
-    predicted_mask_display = np.uint8(255 * predicted_mask_for_class)
+    original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze()) # Ensure original image is also 0-255
+    gt_mask_display = gt_mask_for_class # Now it's already 0-255 uint8
+    predicted_mask_display = predicted_mask_for_class # Now it's already 0-255 uint8
 
     xai_image_display = None
     filter_activation_images = []
