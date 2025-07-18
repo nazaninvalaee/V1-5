@@ -6,11 +6,14 @@ import tensorflow as tf
 import nibabel as nib
 import os
 import io
+
+# Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
 from ensem_4_mod_4_no_mod import create_model
 import create_dataset as cd
 from create_dataset import preprocess_slice
 
 # --- Configuration ---
+# IMPORTANT: Adjust these paths to your specific environment
 TRAINED_MODEL_PATH = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/Model.keras'
 PATH_INPUT_VOLUMES = '/content/drive/MyDrive/feta_2.1/nii_files_input'
 PATH_LABEL_VOLUMES = '/content/drive/MyDrive/feta_2.1/nii_files_output'
@@ -40,12 +43,17 @@ def load_models_once():
         print("Loading models for Gradio...")
         full_model_with_attention = create_model(num_classes=NUM_CLASSES, return_attention_map=True)
         full_model_with_attention.load_weights(TRAINED_MODEL_PATH)
-        
+
         model_for_gradcam = create_model(num_classes=NUM_CLASSES, return_attention_map=False)
         model_for_gradcam.load_weights(TRAINED_MODEL_PATH)
         print("Models loaded.")
 
-@gr.memoize()
+# Load models once when the script starts
+load_models_once()
+
+
+# --- Data Loading (Cached for performance) ---
+@gr.memoize() # Cache this function's output based on inputs
 def load_volume_data(img_path, label_path):
     """Loads NIfTI volume data."""
     img_volume = nib.load(img_path).get_fdata()
@@ -60,19 +68,16 @@ all_filepaths_raw = get_all_filepaths_cached()
 volume_names_map = {os.path.basename(p[0]): p for p in all_filepaths_raw}
 available_volumes = list(volume_names_map.keys())
 
+# New function to get max slices for a selected volume
 def get_max_slices(volume_name):
     if volume_name:
         img_path, _ = volume_names_map[volume_name]
         img_volume, _ = load_volume_data(img_path, '') # Only need img_volume for shape
+        # Return an update object for the slider component
         return gr.Slider(minimum=0, maximum=img_volume.shape[0] - 1, step=1, value=0, interactive=True)
-    return gr.Slider(minimum=0, maximum=0, step=1, value=0, interactive=False) # Default inactive
+    # Return an inactive slider if no volume is selected
+    return gr.Slider(minimum=0, maximum=0, step=1, value=0, interactive=False)
 
-load_models_once()
-
-# --- Data Loading ---
-all_filepaths_raw = cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0.0)[0]
-volume_names_map = {os.path.basename(p[0]): p for p in all_filepaths_raw}
-available_volumes = list(volume_names_map.keys())
 
 # --- XAI Implementations (adapted for Gradio to return image objects) ---
 
@@ -128,7 +133,7 @@ def integrated_gradients(model, input_image_batch, target_class_idx, steps=50, l
         interpolated_logits = logits_model(interpolated_images)[:, :, :, target_class_idx]
 
     path_gradients = tape.gradient(interpolated_logits, interpolated_images)
-    
+
     if path_gradients is None:
         return np.zeros(input_image_batch.shape[1:3])
 
@@ -163,69 +168,44 @@ def visualize_filter_activations_gradio(model, input_image_batch, num_filters_to
             for sub_layer in layer.layers:
                 if isinstance(sub_layer, tf.keras.layers.Conv2D):
                     detected_layers.append(f"{layer.name}/{sub_layer.name}")
-    
+
     detected_layers = sorted(list(set(detected_layers)))
-    layer_names_to_visualize = detected_layers[:6]
+    layer_names_to_visualize = detected_layers[:6] # Display up to first 6 detected layers
 
     if not layer_names_to_visualize:
         print("No suitable Conv2D layers found for activation visualization.")
         return [np.zeros((128,128,3), dtype=np.uint8)] # Return a blank image
 
     images_to_display = []
+    # Add the input image as the first image in the gallery
+    images_to_display.append(np.uint8(255 * input_image_batch.numpy().squeeze()))
+
     for name in layer_names_to_visualize:
         try:
             layer_output = model.get_layer(name).output
             act_model = tf.keras.models.Model(inputs=model.inputs, outputs=layer_output)
             activations = act_model.predict(input_image_batch)
-            
+
             if activations.ndim == 4:
                 activations = activations.squeeze(axis=0)
 
                 num_channels = activations.shape[-1]
                 display_channels = min(num_channels, num_filters_to_show)
 
-                cols = display_channels + 1 if display_channels > 0 else 1
-                rows = 1
-                if cols > 6:
-                    cols = 6
-                    rows = (display_channels + 1 + cols - 1) // cols
-                
-                fig, axes = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
-                axes = axes.flatten()
-
-                # Input image
-                axes[0].imshow(input_image_batch.numpy().squeeze(), cmap='gray')
-                axes[0].set_title('Input')
-                axes[0].axis('off')
-
                 for channel_idx in range(display_channels):
-                    ax = axes[channel_idx + 1]
                     act_map = activations[:, :, channel_idx]
                     if np.max(act_map) > 0:
                         act_map = (act_map - np.min(act_map)) / (np.max(act_map) - np.min(act_map) + 1e-10)
-                    ax.imshow(act_map, cmap='magma')
-                    ax.set_title(f'Filter {channel_idx+1}')
-                    ax.axis('off')
-                
-                for j in range(display_channels + 1, len(axes)):
-                    axes[j].axis('off')
-
-                plt.suptitle(f'Activations for Layer: {name}', fontsize=16)
-                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-                
-                # Convert matplotlib figure to an image that Gradio can display
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-                buf.seek(0)
-                plt.close(fig) # Close the figure to free memory
-                images_to_display.append(buf.getvalue()) # Gradio can handle bytes for images
-
+                    # Convert activation map to a displayable RGB image for Gradio gallery
+                    act_map_colored = (plt.cm.magma(act_map)[:,:,:3] * 255).astype(np.uint8)
+                    images_to_display.append(act_map_colored)
             else:
                 print(f"Layer {name} output has unexpected shape: {activations.shape}. Skipping.")
         except Exception as e:
             print(f"Error visualizing activations for layer {name}: {e}")
             images_to_display.append(np.zeros((128,128,3), dtype=np.uint8)) # Add a blank image on error
-    return images_to_display
+
+    return images_to_display # Return the list of images for the gallery
 
 
 def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
@@ -238,11 +218,11 @@ def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
         original_image_2d = (original_image_2d - original_image_2d.min()) / (original_image_2d.max() - original_image_2d.min() + 1e-10)
 
     img_rgb = cv2.cvtColor(np.uint8(255 * original_image_2d), cv2.COLOR_GRAY2RGB)
-    
+
     norm_heatmap = heatmap
     if np.max(heatmap) > 0:
         norm_heatmap = (heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap) + 1e-10)
-    
+
     cmap_obj = plt.get_cmap(cmap)
     cmap_img = (cmap_obj(norm_heatmap)[:,:,:3] * 255).astype(np.uint8)
 
@@ -255,7 +235,11 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     Main function for the Gradio interface that performs segmentation and XAI.
     """
     if not volume_name or slice_idx is None or target_class_idx is None:
-        return (None, None, None, "Please select all inputs.") + (None,) * (NUM_FILTERS_TO_SHOW + 1) # Return placeholders
+        # Return blank outputs or initial state if inputs are not fully selected
+        blank_image = np.zeros((128, 128), dtype=np.uint8)
+        blank_rgb_image = np.zeros((128, 128, 3), dtype=np.uint8)
+        return blank_image, blank_image, blank_image, "Please select a Volume, Slice, and Class.", blank_rgb_image, []
+
 
     # Load selected volume data
     img_path, label_path = volume_names_map[volume_name]
@@ -270,7 +254,8 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     # Get model predictions
     segmentation_output_softmax, _, averaged_attention_map_raw = full_model_with_attention(input_image_batch)
     predicted_mask_full = np.argmax(segmentation_output_softmax.numpy().squeeze(), axis=-1)
-    
+
+    # Convert masks to 0-255 uint8 for display
     gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
     predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
 
@@ -280,12 +265,12 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     status = f"Segmentation Jaccard: {seg_jaccard:.3f} | GT Pixels: {int(gt_pixel_count)} | Status: {'🚨 Problematic' if seg_jaccard < POOR_PERFORMANCE_JACCARD_THRESHOLD else '✅ Good Performance'}"
 
     # Prepare base images for display
-    original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze()) # Ensure original image is also 0-255
-    gt_mask_display = gt_mask_for_class # Now it's already 0-255 uint8
-    predicted_mask_display = predicted_mask_for_class # Now it's already 0-255 uint8
+    original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze())
+    gt_mask_display = gt_mask_for_class
+    predicted_mask_display = predicted_mask_for_class
 
     xai_image_display = None
-    filter_activation_images = []
+    filter_activation_gallery_output = [] # This will be the list of images for the gallery
 
     if xai_method == "Grad-CAM":
         heatmap = generate_grad_cam_for_class(model_for_gradcam, input_image_batch, target_class_idx)
@@ -297,68 +282,91 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
         attn_map = tf.reduce_mean(averaged_attention_map_raw[0], axis=-1).numpy()
         xai_image_display = overlay_heatmap(input_image_batch.numpy().squeeze(), attn_map, cmap='viridis')
     elif xai_method == "Filter Activations":
-        filter_activation_images = visualize_filter_activations_gradio(full_model_with_attention, input_image_batch)
-        # For filter activations, the primary XAI output will be a gallery, not a single image.
-        # We can set xai_image_display to a blank or original image if desired, or handle it as a separate output.
-        xai_image_display = np.zeros_like(original_image_display) # Blank placeholder for primary XAI image
-
-    # Pad filter_activation_images list to match the number of outputs in the interface
-    # This is crucial for Gradio's multi-output component matching
-    padded_filter_images = filter_activation_images + [None] * (NUM_FILTERS_TO_SHOW * 6) # Pad sufficiently
-
-    return original_image_display, gt_mask_display, predicted_mask_display, status, xai_image_display, *padded_filter_images
+        filter_activation_gallery_output = visualize_filter_activations_gradio(full_model_with_attention, input_image_batch)
+        # When showing filter activations, the main XAI image slot will be blank
+        xai_image_display = np.zeros((original_image_display.shape[0], original_image_display.shape[1], 3), dtype=np.uint8)
 
 
-# --- Gradio Interface Layout ---
+    return original_image_display, gt_mask_display, predicted_mask_display, status, xai_image_display, filter_activation_gallery_output
+
+
+# --- Gradio Interface Layout using gr.Blocks ---
 class_names_map_for_gradio = {i: f"Class {i}" for i in CLASSES_TO_ANALYZE}
 
-# Dynamically create outputs for filter activations
-filter_activation_outputs = [gr.Image(label=f"Filter Activation {i+1}", visible=False) for i in range(NUM_FILTERS_TO_SHOW * 6)] # Enough for multiple layers * filters
+with gr.Blocks(title="Fetal Brain Segmentation XAI Dashboard 🧠") as demo:
+    gr.Markdown("# 🧠 Fetal Brain Segmentation Explainability Dashboard")
+    gr.Markdown("Select a fetal MRI volume, slice, and target anatomical class to view the model's segmentation prediction and various XAI explanations (Grad-CAM, Integrated Gradients, Attention Maps, Filter Activations).")
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            volume_dropdown = gr.Dropdown(choices=available_volumes, label="Select Volume")
+            # Initialize slider with a default range, it will be updated dynamically
+            slice_slider = gr.Slider(minimum=0, maximum=10, step=1, label="Select Slice Index", interactive=False, value=0)
+            class_dropdown = gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0], format_func=lambda x: class_names_map_for_gradio[x])
+            xai_method_radio = gr.Radio(choices=["Original/Prediction", "Grad-CAM", "Integrated Gradients", "Attention Map", "Filter Activations"],
+                                         label="Choose XAI Method", value="Original/Prediction")
+
+            # Metrics output
+            status_textbox = gr.Textbox(label="Segmentation Metrics & Status", interactive=False)
+
+            submit_btn = gr.Button("Analyze!")
+
+        with gr.Column(scale=2):
+            # Core image outputs
+            with gr.Row():
+                original_image_display_ui = gr.Image(label="Original Image", type="numpy", show_label=True)
+                gt_mask_display_ui = gr.Image(label="Ground Truth Mask", type="numpy", show_label=True)
+                predicted_mask_display_ui = gr.Image(label="Predicted Mask", type="numpy", show_label=True)
+
+            # XAI heatmap output (will show one of Grad-CAM, IG, Attention Map)
+            xai_image_display_ui = gr.Image(label="XAI Heatmap Overlay", type="numpy", visible=True, show_label=True)
+
+            # Gallery for filter activations (will be visible only when "Filter Activations" is chosen)
+            filter_activation_gallery_ui = gr.Gallery(label="Filter Activations (Input + Filters)", show_label=True, elem_id="gallery", object_fit="contain", height="auto", visible=False)
 
 
-iface = gr.Interface(
-    fn=explain_segmentation,
-    inputs=[
-        gr.Dropdown(choices=available_volumes, label="Select Volume"),
-        gr.Slider(minimum=0, maximum=img_volume.shape[0]-1 if 'img_volume' in locals() else 10, step=1, label="Select Slice Index"),
-        gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0]),
-        gr.Radio(choices=["Original/Prediction", "Grad-CAM", "Integrated Gradients", "Attention Map", "Filter Activations"], 
-                 label="Choose XAI Method", value="Original/Prediction")
-    ],
-    outputs=[
-        gr.Image(label="Original Image", type="numpy"),
-        gr.Image(label="Ground Truth Mask", type="numpy"),
-        gr.Image(label="Predicted Mask", type="numpy"),
-        gr.Textbox(label="Segmentation Metrics & Status"),
-        gr.Image(label="XAI Heatmap Overlay", type="numpy"),
-        *filter_activation_outputs # Unpack the list of filter activation outputs
-    ],
-    title="🧠 Fetal Brain Segmentation Explainability Dashboard",
-    description="Select a fetal MRI volume, slice, and target anatomical class to view the model's segmentation prediction and various XAI explanations (Grad-CAM, Integrated Gradients, Attention Maps, Filter Activations).",
-    live=False, # Set to True if you want updates on every slider move, but can be slow
-    allow_flagging='never', # Disable flagging for this demo
-    css="footer {visibility: hidden}" # Hide Gradio footer for cleaner look
-)
+    # --- Event Listeners ---
 
-# JavaScript to dynamically show/hide filter activation outputs
-js_code = """
-function(volume_name, slice_idx, target_class_idx, xai_method, original_image_display, gt_mask_display, predicted_mask_display, status, xai_image_display, ...filter_activation_images) {
-    let outputs = [original_image_display, gt_mask_display, predicted_mask_display, status, xai_image_display];
-    let visibility = xai_method === 'Filter Activations';
+    # When volume_dropdown changes, update slice_slider
+    volume_dropdown.change(
+        fn=get_max_slices, # This function returns an updated gr.Slider component
+        inputs=volume_dropdown,
+        outputs=slice_slider,
+        queue=False # This update should happen quickly and not block the queue
+    )
 
-    for (let i = 0; i < filter_activation_images.length; i++) {
-        outputs.push({
-            __type__: "update",
-            value: filter_activation_images[i],
-            visible: visibility
-        });
-    }
-    return outputs;
-}
-"""
+    # When submit_btn is clicked, run the main explanation function
+    submit_btn.click(
+        fn=explain_segmentation,
+        inputs=[
+            volume_dropdown,
+            slice_slider,
+            class_dropdown,
+            xai_method_radio
+        ],
+        outputs=[
+            original_image_display_ui,
+            gt_mask_display_ui,
+            predicted_mask_display_ui,
+            status_textbox,
+            xai_image_display_ui,
+            filter_activation_gallery_ui
+        ]
+    )
 
-# Link JavaScript to the interface
-iface.js = js_code
+    xai_method_radio.change(
+        fn=None,
+        inputs=[xai_method_radio],
+        outputs=[xai_image_display_ui, filter_activation_gallery_ui],
+        _js="""
+        (xai_method) => {
+            if (xai_method === 'Filter Activations') {
+                return [gr.update(visible=false), gr.update(visible=true)];
+            } else {
+                return [gr.update(visible=true), gr.update(visible=false)];
+            }
+        }
+        """
+    )
 
-if __name__ == "__main__":
-    iface.launch(share=True) # Set share=True to get a public link (expires after 72 hours)
+demo.launch(share=True)
