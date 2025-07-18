@@ -6,6 +6,7 @@ import tensorflow as tf
 import nibabel as nib
 import os
 import io
+import functools # <--- ADD THIS LINE
 
 # Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
 from ensem_4_mod_4_no_mod import create_model
@@ -53,14 +54,15 @@ load_models_once()
 
 
 # --- Data Loading (Cached for performance) ---
-@gr.memoize() # Cache this function's output based on inputs
+# Use functools.lru_cache for reliable caching of data loading functions
+@functools.lru_cache(maxsize=None) # <--- CHANGE THIS LINE
 def load_volume_data(img_path, label_path):
     """Loads NIfTI volume data."""
     img_volume = nib.load(img_path).get_fdata()
     label_volume = nib.load(label_path).get_fdata()
     return img_volume, label_volume
 
-@gr.memoize() # Cache the file paths for efficiency
+@functools.lru_cache(maxsize=None) # <--- CHANGE THIS LINE
 def get_all_filepaths_cached():
     return cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0.0)[0]
 
@@ -236,9 +238,12 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
     """
     if not volume_name or slice_idx is None or target_class_idx is None:
         # Return blank outputs or initial state if inputs are not fully selected
-        blank_image = np.zeros((128, 128), dtype=np.uint8)
-        blank_rgb_image = np.zeros((128, 128, 3), dtype=np.uint8)
-        return blank_image, blank_image, blank_image, "Please select a Volume, Slice, and Class.", blank_rgb_image, []
+        blank_image_128_128 = np.zeros((128, 128), dtype=np.uint8)
+        blank_rgb_image_128_128_3 = np.zeros((128, 128, 3), dtype=np.uint8)
+        # Ensure correct number of outputs for the main function
+        return (blank_image_128_128, blank_image_128_128, blank_image_128_128,
+                "Please select a Volume, Slice, and Class.",
+                blank_rgb_image_128_128_3, [])
 
 
     # Load selected volume data
@@ -354,19 +359,21 @@ with gr.Blocks(title="Fetal Brain Segmentation XAI Dashboard 🧠") as demo:
         ]
     )
 
+    # Update visibility when xai_method_radio changes
     xai_method_radio.change(
-        fn=None,
+        fn=None, # No Python function needed, just client-side JS
         inputs=[xai_method_radio],
         outputs=[xai_image_display_ui, filter_activation_gallery_ui],
         _js="""
         (xai_method) => {
             if (xai_method === 'Filter Activations') {
-                return [gr.update(visible=false), gr.update(visible=true)];
+                return [gradio_image_update(visible=false), gradio_image_update(visible=true)];
             } else {
-                return [gr.update(visible=true), gr.update(visible=false)];
+                return [gradio_image_update(visible=true), gradio_image_update(visible=false)];
             }
         }
         """
     )
 
-demo.launch(share=True)
+
+demo.launch(share=True) # Set share=True to get a public link
