@@ -45,13 +45,28 @@ def load_models_once():
         model_for_gradcam.load_weights(TRAINED_MODEL_PATH)
         print("Models loaded.")
 
+@gr.memoize()
 def load_volume_data(img_path, label_path):
     """Loads NIfTI volume data."""
     img_volume = nib.load(img_path).get_fdata()
     label_volume = nib.load(label_path).get_fdata()
     return img_volume, label_volume
 
-# Call this once at the start of the script
+@gr.memoize() # Cache the file paths for efficiency
+def get_all_filepaths_cached():
+    return cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0.0)[0]
+
+all_filepaths_raw = get_all_filepaths_cached()
+volume_names_map = {os.path.basename(p[0]): p for p in all_filepaths_raw}
+available_volumes = list(volume_names_map.keys())
+
+def get_max_slices(volume_name):
+    if volume_name:
+        img_path, _ = volume_names_map[volume_name]
+        img_volume, _ = load_volume_data(img_path, '') # Only need img_volume for shape
+        return gr.Slider(minimum=0, maximum=img_volume.shape[0] - 1, step=1, value=0, interactive=True)
+    return gr.Slider(minimum=0, maximum=0, step=1, value=0, interactive=False) # Default inactive
+
 load_models_once()
 
 # --- Data Loading ---
