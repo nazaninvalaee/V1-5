@@ -306,7 +306,7 @@ iface = gr.Interface(
     inputs=[
         gr.Dropdown(choices=available_volumes, label="Select Volume"),
         gr.Slider(minimum=0, maximum=img_volume.shape[0]-1 if 'img_volume' in locals() else 10, step=1, label="Select Slice Index"),
-        gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0], format_func=lambda x: class_names_map_for_gradio[x]),
+        gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0]),
         gr.Radio(choices=["Original/Prediction", "Grad-CAM", "Integrated Gradients", "Attention Map", "Filter Activations"], 
                  label="Choose XAI Method", value="Original/Prediction")
     ],
