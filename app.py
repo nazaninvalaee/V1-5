@@ -6,7 +6,7 @@ import tensorflow as tf
 import nibabel as nib
 import os
 import io
-import functools # <--- Keep this import
+import functools
 
 # Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
 from ensem_4_mod_4_no_mod import create_model
@@ -54,12 +54,15 @@ load_models_once()
 
 
 # --- Data Loading (Cached for performance) ---
-# Use functools.lru_cache for reliable caching of data loading functions
 @functools.lru_cache(maxsize=None)
 def load_volume_data(img_path, label_path):
-    """Loads NIfTI volume data."""
+    """Loads NIfTI volume data.
+    If label_path is empty or None, label_volume will be None.
+    """
     img_volume = nib.load(img_path).get_fdata()
-    label_volume = nib.load(label_path).get_fdata()
+    label_volume = None # Initialize to None
+    if label_path and os.path.exists(label_path): # Only load if path is valid
+        label_volume = nib.load(label_path).get_fdata()
     return img_volume, label_volume
 
 @functools.lru_cache(maxsize=None)
@@ -70,15 +73,14 @@ all_filepaths_raw = get_all_filepaths_cached()
 volume_names_map = {os.path.basename(p[0]): p for p in all_filepaths_raw}
 available_volumes = list(volume_names_map.keys())
 
-# New function to get max slices for a selected volume - MODIFIED HERE
+# New function to get max slices for a selected volume
 def get_max_slices(volume_name):
     if volume_name:
         img_path, _ = volume_names_map[volume_name]
-        img_volume, _ = load_volume_data(img_path, '') # Only need img_volume for shape
+        # Pass an empty string for label_path, which load_volume_data now handles
+        img_volume, _ = load_volume_data(img_path, '')
         max_slices = img_volume.shape[0] - 1
-        # Return an update object for the slider component, setting the value to 0
         return gr.Slider(minimum=0, maximum=max_slices, step=1, value=0, interactive=True)
-    # Return an inactive slider if no volume is selected
     return gr.Slider(minimum=0, maximum=0, step=1, value=0, interactive=False)
 
 
@@ -224,7 +226,7 @@ def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
 
     norm_heatmap = heatmap
     if np.max(heatmap) > 0:
-        norm_heatmap = (heatmap - np.min(norm_heatmap)) / (np.max(norm_heatmap) - np.min(norm_heatmap) + 1e-10) # Corrected normalization here
+        norm_heatmap = (heatmap - np.min(norm_heatmap)) / (np.max(norm_heatmap) - np.min(norm_heatmap) + 1e-10)
 
     cmap_obj = plt.get_cmap(cmap)
     cmap_img = (cmap_obj(norm_heatmap)[:,:,:3] * 255).astype(np.uint8)
@@ -249,11 +251,18 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, xai_method):
 
     # Load selected volume data
     img_path, label_path = volume_names_map[volume_name]
+    # load_volume_data now handles cases where label_path might not be directly used (e.g., when getting max slices)
     img_volume, label_volume = load_volume_data(img_path, label_path)
 
     # Preprocess slice
     original_slice = img_volume[slice_idx, :, :]
-    original_label = label_volume[slice_idx, :, :]
+    # Ensure label_volume is not None before trying to use it
+    if label_volume is not None:
+        original_label = label_volume[slice_idx, :, :]
+    else:
+        # If no label volume, create a blank one for preprocessing/metrics
+        original_label = np.zeros_like(original_slice, dtype=np.int32)
+
     input_image_processed, ground_truth_label = preprocess_slice(original_slice, original_label)
     input_image_batch = tf.expand_dims(tf.constant(input_image_processed, dtype=tf.float32), axis=0)
 
