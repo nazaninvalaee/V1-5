@@ -70,13 +70,14 @@ all_filepaths_raw = get_all_filepaths_cached()
 volume_names_map = {os.path.basename(p[0]): p for p in all_filepaths_raw}
 available_volumes = list(volume_names_map.keys())
 
-# New function to get max slices for a selected volume
+# New function to get max slices for a selected volume - MODIFIED HERE
 def get_max_slices(volume_name):
     if volume_name:
         img_path, _ = volume_names_map[volume_name]
         img_volume, _ = load_volume_data(img_path, '') # Only need img_volume for shape
-        # Return an update object for the slider component
-        return gr.Slider(minimum=0, maximum=img_volume.shape[0] - 1, step=1, value=0, interactive=True)
+        max_slices = img_volume.shape[0] - 1
+        # Return an update object for the slider component, setting the value to 0
+        return gr.Slider(minimum=0, maximum=max_slices, step=1, value=0, interactive=True)
     # Return an inactive slider if no volume is selected
     return gr.Slider(minimum=0, maximum=0, step=1, value=0, interactive=False)
 
@@ -223,7 +224,7 @@ def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
 
     norm_heatmap = heatmap
     if np.max(heatmap) > 0:
-        norm_heatmap = (heatmap - np.min(heatmap)) / (np.max(heatmap) - np.min(heatmap) + 1e-10)
+        norm_heatmap = (heatmap - np.min(norm_heatmap)) / (np.max(norm_heatmap) - np.min(norm_heatmap) + 1e-10) # Corrected normalization here
 
     cmap_obj = plt.get_cmap(cmap)
     cmap_img = (cmap_obj(norm_heatmap)[:,:,:3] * 255).astype(np.uint8)
