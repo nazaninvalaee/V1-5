@@ -6,14 +6,11 @@ import tensorflow as tf
 import nibabel as nib
 import os
 import io
-
-# Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
 from ensem_4_mod_4_no_mod import create_model
 import create_dataset as cd
 from create_dataset import preprocess_slice
 
 # --- Configuration ---
-# IMPORTANT: Adjust these paths to your specific environment
 TRAINED_MODEL_PATH = '/content/drive/MyDrive/fetal-brain-segmentation-v1.5/checkpoints/Model.keras'
 PATH_INPUT_VOLUMES = '/content/drive/MyDrive/feta_2.1/nii_files_input'
 PATH_LABEL_VOLUMES = '/content/drive/MyDrive/feta_2.1/nii_files_output'
@@ -33,9 +30,6 @@ def jaccard_index(mask1, mask2):
     return intersection / union
 
 # --- Model Loading (Cached for performance) ---
-# Use a global variable to store models, as Gradio functions should be pure
-# and not re-load models on every call if possible.
-# Gradio's caching decorators can help manage this if functions are structured correctly.
 full_model_with_attention = None
 model_for_gradcam = None
 
@@ -50,6 +44,12 @@ def load_models_once():
         model_for_gradcam = create_model(num_classes=NUM_CLASSES, return_attention_map=False)
         model_for_gradcam.load_weights(TRAINED_MODEL_PATH)
         print("Models loaded.")
+
+def load_volume_data(img_path, label_path):
+    """Loads NIfTI volume data."""
+    img_volume = nib.load(img_path).get_fdata()
+    label_volume = nib.load(label_path).get_fdata()
+    return img_volume, label_volume
 
 # Call this once at the start of the script
 load_models_once()
