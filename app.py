@@ -6,7 +6,7 @@ import tensorflow as tf
 import nibabel as nib
 import os
 import io
-import functools # <--- ADD THIS LINE
+import functools # <--- Keep this import
 
 # Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
 from ensem_4_mod_4_no_mod import create_model
@@ -55,14 +55,14 @@ load_models_once()
 
 # --- Data Loading (Cached for performance) ---
 # Use functools.lru_cache for reliable caching of data loading functions
-@functools.lru_cache(maxsize=None) # <--- CHANGE THIS LINE
+@functools.lru_cache(maxsize=None)
 def load_volume_data(img_path, label_path):
     """Loads NIfTI volume data."""
     img_volume = nib.load(img_path).get_fdata()
     label_volume = nib.load(label_path).get_fdata()
     return img_volume, label_volume
 
-@functools.lru_cache(maxsize=None) # <--- CHANGE THIS LINE
+@functools.lru_cache(maxsize=None)
 def get_all_filepaths_cached():
     return cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0.0)[0]
 
@@ -307,7 +307,8 @@ with gr.Blocks(title="Fetal Brain Segmentation XAI Dashboard 🧠") as demo:
             volume_dropdown = gr.Dropdown(choices=available_volumes, label="Select Volume")
             # Initialize slider with a default range, it will be updated dynamically
             slice_slider = gr.Slider(minimum=0, maximum=10, step=1, label="Select Slice Index", interactive=False, value=0)
-            class_dropdown = gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0], format_func=lambda x: class_names_map_for_gradio[x])
+            # Removed format_func as it seems to cause issues despite version
+            class_dropdown = gr.Dropdown(choices=CLASSES_TO_ANALYZE, label="Select Target Class", value=CLASSES_TO_ANALYZE[0])
             xai_method_radio = gr.Radio(choices=["Original/Prediction", "Grad-CAM", "Integrated Gradients", "Attention Map", "Filter Activations"],
                                          label="Choose XAI Method", value="Original/Prediction")
 
@@ -359,20 +360,19 @@ with gr.Blocks(title="Fetal Brain Segmentation XAI Dashboard 🧠") as demo:
         ]
     )
 
-    # Update visibility when xai_method_radio changes
+    # Define a Python function to handle visibility based on radio button
+    def toggle_xai_visibility(xai_method):
+        if xai_method == 'Filter Activations':
+            return gr.Image(visible=False), gr.Gallery(visible=True)
+        else:
+            return gr.Image(visible=True), gr.Gallery(visible=False)
+
+    # Update visibility when xai_method_radio changes using the Python function
     xai_method_radio.change(
-        fn=None, # No Python function needed, just client-side JS
+        fn=toggle_xai_visibility,
         inputs=[xai_method_radio],
         outputs=[xai_image_display_ui, filter_activation_gallery_ui],
-        _js="""
-        (xai_method) => {
-            if (xai_method === 'Filter Activations') {
-                return [gradio_image_update(visible=false), gradio_image_update(visible=true)];
-            } else {
-                return [gradio_image_update(visible=true), gradio_image_update(visible=false)];
-            }
-        }
-        """
+        queue=False # UI updates often don't need to block the queue
     )
 
 
