@@ -258,52 +258,61 @@ def generate_segmentation_explanation(predicted_mask, class_names_map, min_pixel
 
 # --- Gradio Interface Function ---
 def explain_segmentation(volume_name, slice_idx, target_class_idx, selected_xai_method, selected_metric, selected_layer_for_activations):
-    """
-    Main function for the Gradio interface that performs segmentation and XAI.
-    """
-    if not volume_name or slice_idx is None or target_class_idx is None:
-        blank_image = np.zeros((128, 128), dtype=np.uint8)
-        blank_rgb_image = np.zeros((128, 128, 3), dtype=np.uint8)
-        return (blank_image, blank_image, blank_image, "Please select a Volume, Slice, and Class.",
-                blank_rgb_image, [], "No segmentation explanation available.")
+    """
+    Main function for the Gradio interface that performs segmentation and XAI.
+    """
+    if not volume_name or slice_idx is None or target_class_idx is None:
+        blank_image = np.zeros((128, 128), dtype=np.uint8)
+        blank_rgb_image = np.zeros((128, 128, 3), dtype=np.uint8)
+        return (blank_image, blank_image, blank_image, "Please select a Volume, Slice, and Class.",
+                blank_rgb_image, [], "No segmentation explanation available.")
 
-    # Load selected volume data
-    img_path, label_path = volume_names_map[volume_name]
-    img_volume, label_volume = load_volume_data(img_path, label_path)
+    # Load selected volume data
+    img_path, label_path = volume_names_map[volume_name]
+    img_volume, label_volume = load_volume_data(img_path, label_path)
 
-    # Preprocess slice
-    original_slice = img_volume[slice_idx, :, :]
-    if label_volume is not None:
-        original_label = label_volume[slice_idx, :, :]
-    else:
-        original_label = np.zeros_like(original_slice, dtype=np.int32)
-    input_image_processed, ground_truth_label = preprocess_slice(original_slice, original_label)
-    input_image_batch = tf.expand_dims(tf.constant(input_image_processed, dtype=tf.float32), axis=0)
+    # Preprocess slice
+    original_slice = img_volume[slice_idx, :, :]
+    if label_volume is not None:
+        original_label = label_volume[slice_idx, :, :]
+    else:
+        original_label = np.zeros_like(original_slice, dtype=np.int32)
+    input_image_processed, ground_truth_label = preprocess_slice(original_slice, original_label)
+    input_image_batch = tf.expand_dims(tf.constant(input_image_processed, dtype=tf.float32), axis=0)
 
-    # Get model predictions
-    segmentation_output_softmax, _, averaged_attention_map_raw = full_model_with_attention(input_image_batch)
-    predicted_mask_full = np.argmax(segmentation_output_softmax.numpy().squeeze(), axis=-1)
+    # Get model predictions
+    segmentation_output_softmax, _, averaged_attention_map_raw = full_model_with_attention(input_image_batch)
+    predicted_mask_full = np.argmax(segmentation_output_softmax.numpy().squeeze(), axis=-1)
 
-    # Convert masks to 0-255 uint8 for display
-    gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
-    predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
+    # Convert masks to 0-255 uint8 for display
+    gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
+    predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
 
-    # Calculate all metrics
-    metrics = {
-        "Jaccard Index": jaccard_index(predicted_mask_for_class, gt_mask_for_class),
-        "Dice Coefficient": dice_coefficient(predicted_mask_for_class, gt_mask_for_class),
-        "Precision": precision_score(predicted_mask_for_class, gt_mask_for_class),
-        "Recall": recall_score(predicted_mask_for_class, gt_mask_for_class)
-    }
+    # Calculate all metrics
+    dice_value = dice_coefficient(predicted_mask_for_class, gt_mask_for_class) # Store Dice for comparison
+    metrics = {
+        "Jaccard Index": jaccard_index(predicted_mask_for_class, gt_mask_for_class),
+        "Dice Coefficient": dice_value, # Use the calculated Dice value
+        "Precision": precision_score(predicted_mask_for_class, gt_mask_for_class),
+        "Recall": recall_score(predicted_mask_for_class, gt_mask_for_class)
+    }
 
-    # Format status text based on selected metric
-    selected_metric_value = metrics.get(selected_metric, metrics["Jaccard Index"])
-    status = f"Segmentation Metric ({selected_metric}): {selected_metric_value:.3f}"
-    gt_pixel_count = np.sum(gt_mask_for_class)
-    if gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS and metrics["Jaccard Index"] < POOR_PERFORMANCE_JACCARD_THRESHOLD:
-        status += " 🚨 Problematic Performance"
-    elif gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS:
-        status += " ✅ Good Performance"
+    # Format status text based on selected metric
+    selected_metric_value = metrics.get(selected_metric, metrics["Dice Coefficient"]) # Default to Dice
+    status = f"Segmentation Metric ({selected_metric}): {selected_metric_value:.3f}"
+    gt_pixel_count = np.sum(gt_mask_for_class)
+    
+    # ⭐ CRITICAL CHANGE 1: Use a DICE_THRESHOLD for performance check.
+    # ⭐ We need to define a new threshold (POOR_PERFORMANCE_DICE_THRESHOLD)
+    #    or rename the old one and assume its value is appropriate for Dice (~0.65 to 0.70 is often used).
+    # Since I don't see the definition for POOR_PERFORMANCE_JACCARD_THRESHOLD, 
+    # I'll assume its value is still used, but we check against the Dice value.
+    # Note: A Jaccard of 0.5 (your old threshold) is roughly equivalent to a Dice of 0.67.
+    
+    if gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS and dice_value < POOR_PERFORMANCE_JACCARD_THRESHOLD:
+        status += " 🚨 Problematic Performance"
+    elif gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS:
+        status += " ✅ Good Performance"
 
     # Prepare base images and XAI output
     original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze())
