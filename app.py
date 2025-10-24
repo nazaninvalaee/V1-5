@@ -257,6 +257,7 @@ def generate_segmentation_explanation(predicted_mask, class_names_map, min_pixel
 
 
 # --- Gradio Interface Function ---
+# --- Gradio Interface Function ---
 def explain_segmentation(volume_name, slice_idx, target_class_idx, selected_xai_method, selected_metric, selected_layer_for_activations):
     """
     Main function for the Gradio interface that performs segmentation and XAI.
@@ -313,6 +314,9 @@ def explain_segmentation(volume_name, slice_idx, target_class_idx, selected_xai_
         status += " 🚨 Problematic Performance"
     elif gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS:
         status += " ✅ Good Performance"
+
+    # Prepare base images and XAI output
+    # ... (rest of the function is unchanged)
 
     # Prepare base images and XAI output
     original_image_display = np.uint8(255 * input_image_batch.numpy().squeeze())
