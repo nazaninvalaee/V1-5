@@ -25,16 +25,20 @@ POOR_PERFORMANCE_DICE_THRESHOLD = 0.65
 NUM_FILTERS_TO_SHOW = 8
 
 # Class names mapping for the output explanation
+# ⭐ FIX: Use the standard FeTA/NIfTI mapping to ensure correct index comparison.
 CLASS_NAMES = {
     0: "Background",
-    1: "Cerebellum",
-    2: "Cerebral White Matter",
-    3: "Cerebral Cortex",
-    4: "Lateral Ventricles",
-    5: "Extra-Axial CSF",
-    6: "Corpus Callosum",
+    1: "External Cerbrospinal Fluid", 
+    2: "Gray Matter", 
+    3: "White Matter",
+    4: "Lateral Ventricles", 
+    5: "Cerebellum", 
+    6: "Deep Grey Matter", 
     7: "Brainstem"
 }
+
+# Also ensure your CLASSES_TO_ANALYZE aligns with the names in the standard legend:
+CLASSES_TO_ANALYZE = [1, 2, 3, 4, 5, 6, 7]
 
 # --- Helper Functions (Metrics) ---
 def jaccard_index(mask1, mask2):
