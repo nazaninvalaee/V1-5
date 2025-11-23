@@ -452,7 +452,7 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
                 confidence_map_display_ui = gr.Image(label="AI Confidence Map (Risk Areas)", type="numpy", show_label=True)
 
             # XAI Influence Explanation
-            influence_explanation_textbox = gr.Markdown(label="Influence Map Explanation", interactive=False, lines=5)
+            influence_explanation_textbox = gr.Markdown(label="Influence Map Explanation")
 
 
     # --- Event Listeners ---
