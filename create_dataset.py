@@ -11,7 +11,6 @@ import random
 from preprocessing import reduce_2d, flip, blur  
 
 # --- Preprocess a Single 2D Slice ---
-# --- Corrected Function: Preprocess a Single 2D Slice ---
 def preprocess_slice(img_slice_2d, label_slice_2d):
     """
     Resizes, normalizes, and reshapes a 2D slice and its label.
@@ -22,11 +21,8 @@ def preprocess_slice(img_slice_2d, label_slice_2d):
     max_val = np.max(img_resized)
     img_normalized = img_resized.astype(np.float32) / max_val if max_val > 0 else img_resized.astype(np.float32)
 
-    # Image is correct: (256, 256, 1)
     img_final = np.expand_dims(img_normalized, axis=-1)
-    
-    # FIX: Expand label dimension from (256, 256) to (256, 256, 1)
-    label_final = np.expand_dims(label_resized.astype(np.uint8), axis=-1)
+    label_final = label_resized.astype(np.uint8)
 
     return img_final, label_final
 
@@ -155,7 +151,6 @@ def tf_data_generator(filepaths_list, is_training=True, slices_per_volume=50):
                 continue
 
 
-# --- Corrected Function: TensorFlow Data Creator ---
 def create_tf_dataset(filepaths_list, batch_size, is_training, slices_per_volume):
     """
     Creates a TensorFlow dataset from the generator.
@@ -164,12 +159,13 @@ def create_tf_dataset(filepaths_list, batch_size, is_training, slices_per_volume
         lambda: tf_data_generator(filepaths_list, is_training, slices_per_volume),
         output_signature=(
             tf.TensorSpec(shape=(256, 256, 1), dtype=tf.float32),
-            # FIX: Change target shape from (256, 256) to (256, 256, 1)
-            tf.TensorSpec(shape=(256, 256, 1), dtype=tf.uint8) 
+            tf.TensorSpec(shape=(256, 256), dtype=tf.uint8)
         )
     )
 
     if is_training:
+        # Shuffle the buffer if it's training data. 
+        # Shuffling is handled by the generator itself, but we can also shuffle the buffer.
         dataset = dataset.shuffle(buffer_size=1000)
     
     dataset = dataset.batch(batch_size)
