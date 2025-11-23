@@ -11,7 +11,7 @@ import warnings
 # Suppress minor Matplotlib/Gradio warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Ensure your 'ensem_4_mod_4_no_mod' file is correctly set up.
+# --- Assuming these imports are correct for your environment ---
 from ensem_4_mod_4_no_mod import create_model
 import create_dataset as cd
 from create_dataset import preprocess_slice
@@ -24,19 +24,20 @@ NUM_CLASSES = 8
 
 CLASSES_TO_ANALYZE = [1, 2, 3, 4, 5, 6, 7]
 MIN_PIXELS_FOR_ANALYSIS = 1000
-POOR_PERFORMANCE_JACCARD_THRESHOLD = 0.5
-MC_SAMPLES = 25 # Reduced samples for faster Gradio feedback
+# Dice threshold (0.65 is used as the minimum for "acceptable" segmentation)
+POOR_PERFORMANCE_DICE_THRESHOLD = 0.65 
+MC_SAMPLES = 25
 
-# Class names mapping for the output explanation
+# UPDATED: Standardized Class names (DGM included, CC removed)
 CLASS_NAMES = {
     0: "Background",
-    1: "Cerebellum",
-    2: "Cerebral White Matter",
-    3: "Cerebral Cortex",
-    4: "Lateral Ventricles",
-    5: "Extra-Axial CSF",
-    6: "Corpus Callosum",
-    7: "Brainstem"
+    1: "Cerebellum (CB)",
+    2: "White Matter (WM)",
+    3: "Grey Matter (GM)", 
+    4: "Lateral Ventricles (LV)",
+    5: "External Cerebrospinal Fluid (eCSF)",
+    6: "Deep Grey Matter (DGM)",              
+    7: "Brainstem (BS)"
 }
 CLASSES_TO_ANALYZE_MAP = {k: CLASS_NAMES[k] for k in CLASSES_TO_ANALYZE}
 CLINICAL_XAI_METHODS = {
@@ -46,7 +47,7 @@ CLINICAL_XAI_METHODS = {
 }
 
 
-# --- Core Prediction Logic (Adapted from previous step) ---
+# --- Core Prediction Logic ---
 def predict_with_mc_dropout_and_attention(model_path, input_image_batch, num_samples=MC_SAMPLES, num_classes=NUM_CLASSES):
     """
     Performs Monte Carlo Dropout predictions and extracts attention maps.
@@ -58,7 +59,6 @@ def predict_with_mc_dropout_and_attention(model_path, input_image_batch, num_sam
     if len(input_image_batch.shape) == 3:
         input_image_batch = tf.expand_dims(input_image_batch, axis=0)
 
-    # Load model instance with attention map output
     xai_model = create_model(num_classes=num_classes, return_attention_map=True)
     xai_model.load_weights(model_path)
 
@@ -66,50 +66,47 @@ def predict_with_mc_dropout_and_attention(model_path, input_image_batch, num_sam
     all_attention_maps = []
 
     for _ in range(num_samples):
-        # FIX: Capture all 3 outputs, ignoring the auxiliary logits_output
+        # Capture all 3 outputs, ignoring the auxiliary logits_output
         pred_mask_batch, _, attention_map_batch = xai_model(input_image_batch, training=True) 
 
         all_predictions.append(pred_mask_batch.numpy())
         all_attention_maps.append(attention_map_batch.numpy())
 
-    all_predictions = np.array(all_predictions).squeeze(axis=1) # Squeeze batch axis if size 1
-    all_attention_maps = np.array(all_attention_maps).squeeze(axis=1) # Squeeze batch axis if size 1
+    all_predictions = np.array(all_predictions).squeeze(axis=1)
+    all_attention_maps = np.array(all_attention_maps).squeeze(axis=1)
 
-    # --- Calculate Mean Prediction ---
     mean_prediction = np.mean(all_predictions, axis=0)
 
-    # --- Calculate Uncertainty Map (Entropy) ---
+    # Calculate Uncertainty Map (Entropy)
     epsilon = 1e-10
     uncertainty_map = -np.sum(mean_prediction * np.log(mean_prediction + epsilon), axis=-1)
 
-    # --- Process Attention Map ---
-    # Squeeze the last channel axis if it exists and then average over samples
-    averaged_attention_map = np.mean(all_attention_maps, axis=0) # Average over samples only
+    # Process Attention Map
+    averaged_attention_map = np.mean(all_attention_maps, axis=0) 
     if averaged_attention_map.ndim == 3 and averaged_attention_map.shape[-1] == 1:
         averaged_attention_map = averaged_attention_map.squeeze(axis=-1)
-
 
     return mean_prediction, uncertainty_map, averaged_attention_map
 
 
 # --- Helper Functions (Metrics, Grad-CAM, Overlay, etc.) ---
-def jaccard_index(mask1, mask2):
+def dice_coefficient(mask1, mask2):
+    """Calculates the Dice Coefficient (F1 Score)."""
     intersection = np.sum(mask1 * mask2)
-    union = np.sum(mask1) + np.sum(mask2) - intersection
-    if union == 0:
-        return 1.0 if intersection == 0 else 0.0
-    return intersection / union
+    # Added 1e-10 for numerical stability
+    return (2. * intersection) / (np.sum(mask1) + np.sum(mask2) + 1e-10) 
 
-# Grad-CAM function (same as provided)
+
 def generate_grad_cam_for_class(model, input_image_batch, target_class_idx, layer_name='gradcam_target_conv', logits_layer_name='logits_output'):
+    """Generates a Grad-CAM heatmap. Layer name fixed to 'gradcam_target_conv'."""
     grad_model = tf.keras.models.Model(
         inputs=[model.inputs],
-        outputs=[model.get_layer(layer_name).output, model.get_layer(logits_layer_name).output]
+        # FIX 1: Using the correct, existing layer name
+        outputs=[model.get_layer(layer_name).output, model.get_layer(logits_layer_name).output] 
     )
     with tf.GradientTape() as tape:
         tape.watch(input_image_batch)
         last_conv_layer_output, logits = grad_model(input_image_batch)
-        # Use logits output for Grad-CAM target
         target_class_logit_map = logits[:, :, :, target_class_idx]
         target_class_score = tf.reduce_sum(target_class_logit_map)
     grads = tape.gradient(target_class_score, last_conv_layer_output)
@@ -125,12 +122,14 @@ def generate_grad_cam_for_class(model, input_image_batch, target_class_idx, laye
     else:
         normalized_heatmap = heatmap / max_heatmap
     normalized_heatmap = normalized_heatmap.numpy().squeeze()
+    
+    # FIX 2: Ensure correct order for cv2.resize: (width, height)
     original_height, original_width = input_image_batch.shape[1:3]
-    heatmap_resized = cv2.resize(normalized_heatmap, (original_height, original_width))
+    heatmap_resized = cv2.resize(normalized_heatmap, (original_width, original_height))
     return heatmap_resized
 
-# Integrated Gradients function (same as provided)
 def integrated_gradients(model, input_image_batch, target_class_idx, steps=50, logits_layer_name='logits_output'):
+    """Computes Integrated Gradients. FIX: Ensures correct order for cv2.resize: (width, height)"""
     logits_model = tf.keras.models.Model(
         inputs=model.inputs,
         outputs=model.get_layer(logits_layer_name).output
@@ -154,26 +153,34 @@ def integrated_gradients(model, input_image_batch, target_class_idx, steps=50, l
         normalized_heatmap = np.zeros_like(normalized_heatmap)
     else:
         normalized_heatmap = (normalized_heatmap - min_val) / (max_val - min_val)
+    
+    # FIX 2: Ensure correct order for cv2.resize: (width, height)
     original_height, original_width = input_image_batch.shape[1:3]
-    heatmap_resized = cv2.resize(normalized_heatmap, (original_height, original_width))
+    heatmap_resized = cv2.resize(normalized_heatmap, (original_width, original_height))
     return heatmap_resized
 
 
 def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
-    """Overlays a heatmap on a grayscale image."""
+    """Overlays a heatmap on a grayscale image. Assumes heatmap and image have same HxW."""
     original_image_2d = original_image_2d.astype(np.float32)
     original_image_2d = (original_image_2d - original_image_2d.min()) / (original_image_2d.max() - original_image_2d.min() + 1e-10)
     img_rgb = cv2.cvtColor(np.uint8(255 * original_image_2d), cv2.COLOR_GRAY2RGB)
+    
     norm_heatmap = heatmap
     if np.max(heatmap) > 0:
         norm_heatmap = (heatmap - np.min(norm_heatmap)) / (np.max(norm_heatmap) - np.min(norm_heatmap) + 1e-10)
+    
+    if norm_heatmap.ndim == 3:
+         norm_heatmap = norm_heatmap.squeeze() 
+         
     cmap_obj = plt.get_cmap(cmap)
     cmap_img = (cmap_obj(norm_heatmap)[:,:,:3] * 255).astype(np.uint8)
+    
     overlay = cv2.addWeighted(img_rgb, 1 - alpha, cmap_img, alpha, 0)
     return overlay
 
 
-# --- Semantic Explanation Functions (New) ---
+# --- Semantic Explanation Functions ---
 def generate_segmentation_explanation(predicted_mask, class_names_map, min_pixels):
     """Generates a descriptive text report for the predicted segmentation."""
     unique_classes = np.unique(predicted_mask)
@@ -181,7 +188,7 @@ def generate_segmentation_explanation(predicted_mask, class_names_map, min_pixel
     found_parts = False
     
     for class_id in unique_classes:
-        if class_id == 0:  # Skip background
+        if class_id == 0:
             continue
 
         class_name = class_names_map.get(class_id, f"Class {class_id}")
@@ -203,19 +210,16 @@ def generate_confidence_explanation(uncertainty_map):
     if uncertainty_map is None:
         return "Confidence assessment is unavailable."
 
-    # Normalize uncertainty map (0 to 1)
     min_val = np.min(uncertainty_map)
     max_val = np.max(uncertainty_map)
     uncertainty_map_normalized = (uncertainty_map - min_val) / (max_val - min_val + 1e-10)
     
-    # Analyze max uncertainty in the relevant brain area
     relevant_uncertainty = uncertainty_map_normalized[uncertainty_map_normalized > 0.05]
     
     if relevant_uncertainty.size == 0:
         return "### AI Confidence Assessment\n\n**Assessment:** High Confidence. The AI is highly certain about all predicted boundaries. Minimal review is necessary."
         
-    mean_risk = np.mean(relevant_uncertainty)
-    max_risk = np.max(relevant_uncertainty)
+    max_risk = np.max(relevant_uncertainty) if relevant_uncertainty.size > 0 else 0
     
     if max_risk < 0.3:
         assessment = "High Confidence: The segmentation boundaries are predicted with very high certainty."
@@ -231,10 +235,10 @@ def generate_influence_explanation(xai_method, target_class_name):
     if xai_method == "Regions of Focus (Attention)":
         return f"### AI Focus Map Interpretation\n\nThis map shows which general areas the AI prioritized when determining **all** structure boundaries. Highlighting (brighter colors) indicates regions that received the most weight in the global decision-making process."
     
-    elif xai_method == "Regions of Influence": # Grad-CAM
+    elif xai_method == "Regions of Influence":
         return f"### AI Influence Map Interpretation\n\nThis map highlights the specific pixels that had the strongest influence on the prediction of the **{target_class_name}**. The brighter the area (yellow/red), the more that region served as the 'evidence' for the AI."
         
-    elif xai_method == "Feature Sensitivity": # Integrated Gradients
+    elif xai_method == "Feature Sensitivity":
         return f"### AI Feature Sensitivity Interpretation\n\nThis map shows which image features (edges, textures) contributed most to the **{target_class_name}** prediction across the entire image. Brighter areas mean the AI is highly sensitive to the features in that region."
         
     return "Select an AI Focus Map method above to get a detailed explanation."
@@ -244,37 +248,21 @@ def generate_influence_explanation(xai_method, target_class_name):
 full_model_with_attention = None
 model_for_gradcam = None
 
-def get_all_conv_layers(model):
-    """Dynamically finds all Conv2D layer names in the model."""
-    layer_names = []
-    for layer in model.layers:
-        if isinstance(layer, tf.keras.layers.Conv2D):
-            layer_names.append(layer.name)
-        elif isinstance(layer, tf.keras.Model):
-            for sub_layer in layer.layers:
-                if isinstance(sub_layer, tf.keras.layers.Conv2D):
-                    layer_names.append(f"{layer.name}/{sub_layer.name}")
-    return sorted(list(set(layer_names)))
-
-
 def load_models_once():
     """Loads the trained Keras models only once."""
     global full_model_with_attention, model_for_gradcam
     if full_model_with_attention is None:
         print("Loading models for Gradio...")
-        # Load the attention-enabled model for MC Dropout and Attention Map
+        
         full_model_with_attention = create_model(num_classes=NUM_CLASSES, return_attention_map=True)
-        # We need a dummy compile to ensure all layers are built before loading weights
         full_model_with_attention.compile(optimizer='adam', loss='mae') 
         full_model_with_attention.load_weights(TRAINED_MODEL_PATH)
 
-        # Load the standard model for Grad-CAM/IG
         model_for_gradcam = create_model(num_classes=NUM_CLASSES, return_attention_map=False)
         model_for_gradcam.compile(optimizer='adam', loss='mae') 
         model_for_gradcam.load_weights(TRAINED_MODEL_PATH)
         print("Models loaded.")
 
-# Load models once when the script starts
 load_models_once()
 
 
@@ -290,7 +278,6 @@ def load_volume_data(img_path, label_path):
 
 @functools.lru_cache(maxsize=None)
 def get_all_filepaths_cached():
-    # n=-1 loads all files
     return cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0.0)[0]
 
 all_filepaths_raw = get_all_filepaths_cached()
@@ -315,10 +302,8 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
         blank_image = np.zeros((256, 256), dtype=np.uint8)
         blank_rgb_image = np.zeros((256, 256, 3), dtype=np.uint8)
         return (blank_image, blank_image, blank_image, "Please select Volume, Slice, and Class.",
-                blank_rgb_image, blank_rgb_image, "No segmentation explanation available.", 
-                "N/A", "N/A")
+                blank_rgb_image, blank_rgb_image, "N/A", "N/A", "N/A")
 
-    # Map target class display name back to ID
     reverse_map = {v: k for k, v in CLASSES_TO_ANALYZE_MAP.items()}
     target_class_idx = reverse_map.get(target_class_display_name, 1)
 
@@ -345,13 +330,14 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
     predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
 
-    jaccard = jaccard_index(predicted_mask_for_class, gt_mask_for_class)
+    # UPDATED: Use Dice Score
+    dice_score = dice_coefficient(predicted_mask_for_class, gt_mask_for_class)
     
     # 5. Status and Quality Check
     gt_pixel_count = np.sum(gt_mask_for_class)
-    status = f"Quality Check Score (Jaccard Index): **{jaccard:.3f}**"
-    if gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS and jaccard < POOR_PERFORMANCE_JACCARD_THRESHOLD:
-        status += " ⚠️ **Requires Radiologist Review (Score Below 0.5)**"
+    status = f"Quality Check Score (Dice Coefficient): **{dice_score:.3f}**"
+    if gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS and dice_score < POOR_PERFORMANCE_DICE_THRESHOLD:
+        status += " ⚠️ **Requires Radiologist Review (Score Below 0.65)**"
     elif gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS:
         status += " ✅ **Segmentation Acceptable**"
 
@@ -359,8 +345,9 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     xai_heatmap = np.zeros_like(input_image_processed, dtype=np.float32)
     xai_cmap = 'hot'
     
+    # FIX 1: Using 'gradcam_target_conv' as the known late convolutional layer
     if selected_xai_method == "Regions of Influence":
-        xai_heatmap = generate_grad_cam_for_class(model_for_gradcam, input_image_batch, target_class_idx, layer_name='gradcam_target_conv')
+        xai_heatmap = generate_grad_cam_for_class(model_for_gradcam, input_image_batch, target_class_idx, layer_name='gradcam_target_conv') 
     elif selected_xai_method == "Feature Sensitivity":
         xai_heatmap = integrated_gradients(model_for_gradcam, input_image_batch, target_class_idx)
         xai_cmap = 'plasma'
@@ -371,7 +358,6 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     # 7. Image Outputs
     original_image_display = np.uint8(255 * input_image_processed.squeeze())
     
-    # XAI (Influence) Map Overlay
     xai_image_display = overlay_heatmap(input_image_processed, xai_heatmap, cmap=xai_cmap)
     
     # Confidence Map Overlay (Uncertainty)
@@ -385,7 +371,7 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     # 9. Return Results
     return (
         original_image_display,
-        gt_mask_for_class,
+        gt_mask_display_ui,
         predicted_mask_for_class,
         status,
         xai_image_display,
@@ -398,11 +384,8 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
 
 # --- Gradio Interface Layout using gr.Blocks ---
 with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinical_demo:
-    gr.Markdown("# 🤰 Fetal Brain Segmentation Review Tool")
+    gr.Markdown("# 🧠 Fetal Brain Segmentation Review Tool")
     gr.Markdown("Tool for Radiologists/Clinicians to verify AI segmentations and assess confidence.")
-
-    # State component to hold the current class ID
-    target_class_id_state = gr.State(value=1)
 
     with gr.Row():
         with gr.Column(scale=1):
@@ -410,13 +393,12 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
             volume_dropdown = gr.Dropdown(choices=available_volumes, label="Select Patient Scan (Volume)")
             slice_slider = gr.Slider(minimum=0, maximum=10, step=1, label="Select Slice View", interactive=False, value=0)
             
-            # Use Class Names for clarity
+            # Uses updated class names (CB, WM, GM, LV, eCSF, DGM, BS)
             class_dropdown = gr.Dropdown(choices=list(CLASSES_TO_ANALYZE_MAP.values()), label="Target Structure for Analysis", value=CLASSES_TO_ANALYZE_MAP[CLASSES_TO_ANALYZE[0]])
             
             submit_btn = gr.Button("Analyze Segmentation", variant="primary")
 
             gr.Markdown("### 2. AI Influence and Explanation")
-            # Simplified XAI radio buttons
             xai_method_radio = gr.Radio(choices=list(CLINICAL_XAI_METHODS.values()),
                                         label="View AI's Focus Map", value="Regions of Influence")
             
@@ -431,27 +413,23 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
 
             status_textbox = gr.Textbox(label="AI Quality Check Score", interactive=False, lines=2)
 
-            # --- ROW 2: Written Reports ---
+            # --- ROW 2: Written Reports (FIXED) ---
             gr.Markdown("### Written AI Reports")
-
+            
             with gr.Row():
-                # Markdown should only use 'label' or 'value' (initial content).
                 segmentation_explanation_textbox = gr.Markdown(label="Segmentation Summary Report") 
             
             with gr.Row():
-                # Markdown should only use 'label' or 'value' (initial content).
                 confidence_explanation_textbox = gr.Markdown(label="AI Confidence Assessment")
-            
+
             # --- ROW 3: Visual Explanations (Trust Maps) ---
             gr.Markdown("### Visual Trust Maps")
             
             with gr.Row():
-                # XAI (Influence) Map Overlay
                 xai_image_display_ui = gr.Image(label="AI Influence Map (Where did the AI look?)", type="numpy", show_label=True)
-                # Confidence Map Overlay (NEW)
                 confidence_map_display_ui = gr.Image(label="AI Confidence Map (Risk Areas)", type="numpy", show_label=True)
 
-            # XAI Influence Explanation
+            # XAI Influence Explanation (FIXED)
             influence_explanation_textbox = gr.Markdown(label="Influence Map Explanation")
 
 
@@ -463,7 +441,7 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
         inputs=[
             volume_dropdown,
             slice_slider,
-            class_dropdown, # This passes the display name (e.g., 'Cerebellum')
+            class_dropdown, 
             xai_method_radio,
         ],
         outputs=[
