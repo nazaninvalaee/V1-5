@@ -1,109 +1,106 @@
-from tensorflow.keras import models, layers
-from tensorflow.keras.layers import Add, BatchNormalization
+import numpy as np
+import cv2 as cv
 
 
-# Residual Block
-def residual_block(x, filters):
+def reduce_2d(data1, data2, axis):
     """
-    A basic residual block with Batch Normalization.
+    Removes black (all-zero) slices from the beginning and end along a given axis.
+
+    Args:
+        data1 (np.ndarray): First 3D volume.
+        data2 (np.ndarray): Second 3D volume (e.g., label).
+        axis (int): Axis along which to remove black slices (0, 1, or 2).
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Cleaned 3D volumes.
     """
-    shortcut = x
+    i = 0
+    c = 0
 
-    # First Conv -> BN -> ReLU
-    x = layers.Conv2D(filters, 3, padding='same', use_bias=False)(x)
-    x = BatchNormalization()(x)
-    x = layers.Activation('relu')(x)
+    while True:
+        if axis == 2:
+            x = data1[:, :, i].ravel()
+        elif axis == 1:
+            x = data1[:, i, :].ravel()
+        else:  # axis == 0
+            x = data1[i, :, :].ravel()
 
-    # Second Conv -> BN
-    x = layers.Conv2D(filters, 3, padding='same', use_bias=False)(x)
-    x = BatchNormalization()(x)
+        if x.max() == x.min():
+            if c == 0:
+                if axis == 2:
+                    data1, data2 = data1[:, :, 1:], data2[:, :, 1:]
+                elif axis == 1:
+                    data1, data2 = data1[:, 1:, :], data2[:, 1:, :]
+                else:
+                    data1, data2 = data1[1:, :, :], data2[1:, :, :]
+            else:
+                if axis == 2:
+                    data1, data2 = data1[:, :, :-1], data2[:, :, :-1]
+                elif axis == 1:
+                    data1, data2 = data1[:, :-1, :], data2[:, :-1, :]
+                else:
+                    data1, data2 = data1[:-1, :, :], data2[:-1, :, :]
+        elif c == 0:
+            i = -1
+            c = 1
+        else:
+            break
 
-    # Shortcut connection
-    if shortcut.shape[-1] != filters:
-        shortcut = layers.Conv2D(filters, 1, padding='same', use_bias=False)(shortcut)
-        shortcut = BatchNormalization()(shortcut)
-
-    x = Add()([shortcut, x])
-    x = layers.Activation('relu')(x)
-
-    return x
+    return data1, data2
 
 
-# Multi-Scale Feature Extraction
-def multi_scale_conv(x, filters):
+def flip(d1_img, d2_label, flip_code):
     """
-    Multi-scale convolution block using 3x3, 5x5, and 7x7 kernels with Batch Normalization.
+    Flips a 2D image slice and its corresponding label.
+
+    Args:
+        d1_img (np.ndarray): Image of shape (H, W, 1).
+        d2_label (np.ndarray): Label of shape (H, W).
+        flip_code (int): 0 = vertical, 1 = horizontal, -1 = both.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Flipped image and label.
     """
-    # 3x3 branch -> BN -> ReLU
-    conv1 = layers.Conv2D(filters, 3, padding='same', use_bias=False)(x)
-    conv1 = BatchNormalization()(conv1)
-    conv1 = layers.Activation('relu')(conv1)
-
-    # 5x5 branch -> BN -> ReLU
-    conv2 = layers.Conv2D(filters, 5, padding='same', use_bias=False)(x)
-    conv2 = BatchNormalization()(conv2)
-    conv2 = layers.Activation('relu')(conv2)
-    
-    # 7x7 branch -> BN -> ReLU
-    conv3 = layers.Conv2D(filters, 7, padding='same', use_bias=False)(x)
-    conv3 = BatchNormalization()(conv3)
-    conv3 = layers.Activation('relu')(conv3)
-
-    concatenated = layers.Concatenate()([conv1, conv2, conv3])
-    
-    # 1x1 reduction -> BN -> ReLU
-    reduced = layers.Conv2D(filters, 1, padding='same', use_bias=False)(concatenated)
-    reduced = BatchNormalization()(reduced)
-    reduced = layers.Activation('relu')(reduced)
-
-    return reduced
+    flipped_img = np.expand_dims(cv.flip(d1_img.squeeze(), flip_code), axis=-1)
+    flipped_label = cv.flip(d2_label, flip_code)
+    return flipped_img, flipped_label
 
 
-# U-Net Style Model with Residual Blocks and Multi-Scale Convolutions
-def create_model(ensem=0, dropout_rate=0.2):
+def blur(x_img, apply_blur=True):
     """
-    Builds a segmentation model with multi-scale convolutions and residual blocks.
+    Applies random Gaussian blur to simulate motion blur.
+
+    Args:
+        x_img (np.ndarray): Image of shape (H, W, 1).
+        apply_blur (bool): Whether to apply the blur.
+
+    Returns:
+        np.ndarray: Blurred image of shape (H, W, 1).
     """
-    inp = layers.Input(shape=(256, 256, 1))
+    if not apply_blur:
+        return x_img
 
-    # Encoder
-    conv1 = residual_block(multi_scale_conv(inp, 16), 16)
-    pool1 = layers.MaxPool2D(2)(conv1)
-    pool1 = layers.Dropout(dropout_rate)(pool1)
+    f = np.random.randint(3)
+    img_2d = x_img.squeeze()
 
-    conv2 = residual_block(multi_scale_conv(pool1, 32), 32)
-    pool2 = layers.MaxPool2D(2)(conv2)
-    pool2 = layers.Dropout(dropout_rate)(pool2)
-
-    conv3 = residual_block(multi_scale_conv(pool2, 64), 64)
-    pool3 = layers.MaxPool2D(2)(conv3)
-    pool3 = layers.Dropout(dropout_rate)(pool3)
-
-    conv4 = residual_block(multi_scale_conv(pool3, 128), 128)
-    pool4 = layers.MaxPool2D(2)(conv4)
-    pool4 = layers.Dropout(dropout_rate)(pool4)
-
-    # Bottleneck
-    bottleneck = residual_block(multi_scale_conv(pool4, 256), 256)
-    bottleneck = layers.Dropout(dropout_rate)(bottleneck)
-
-    # Decoder
-    up4 = layers.Conv2DTranspose(128, 3, strides=2, padding='same', activation='relu', use_bias=False)(bottleneck)
-    up4 = residual_block(layers.Concatenate()([up4, conv4]), 128)
-
-    up3 = layers.Conv2DTranspose(64, 3, strides=2, padding='same', activation='relu', use_bias=False)(up4)
-    up3 = residual_block(layers.Concatenate()([up3, conv3]), 64)
-
-    up2 = layers.Conv2DTranspose(32, 3, strides=2, padding='same', activation='relu', use_bias=False)(up3)
-    up2 = residual_block(layers.Concatenate()([up2, conv2]), 32)
-
-    up1 = layers.Conv2DTranspose(16, 3, strides=2, padding='same', activation='relu', use_bias=False)(up2)
-    up1 = residual_block(layers.Concatenate()([up1, conv1]), 16)
-
-    if ensem == 1:
-        model = models.Model(inputs=inp, outputs=up1)
+    if f == 0:
+        blurred = cv.GaussianBlur(img_2d, (11, 11), 0)
+    elif f == 1:
+        blurred = cv.GaussianBlur(img_2d, (15, 1), 0)
     else:
-        final_output = layers.Conv2D(8, 1, activation='sigmoid', padding='same')(up1)
-        model = models.Model(inputs=inp, outputs=final_output)
+        blurred = cv.GaussianBlur(img_2d, (1, 15), 0)
 
-    return model
+    return np.expand_dims(blurred, axis=-1)
+
+
+def detect_edges(label):
+    """
+    Applies Canny edge detection to a label mask.
+
+    Args:
+        label (np.ndarray): Label of shape (H, W), uint8 type.
+
+    Returns:
+        np.ndarray: Edge map (binary mask).
+    """
+    return cv.Canny(label.astype(np.uint8), threshold1=100, threshold2=200)
