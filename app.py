@@ -433,13 +433,15 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
 
             # --- ROW 2: Written Reports ---
             gr.Markdown("### Written AI Reports")
-            
-            with gr.Row():
-                segmentation_explanation_textbox = gr.Markdown(label="Segmentation Summary Report", interactive=False, lines=5)
-            
-            with gr.Row():
-                confidence_explanation_textbox = gr.Markdown(label="AI Confidence Assessment", interactive=False, lines=5)
 
+            with gr.Row():
+                # Markdown should only use 'label' or 'value' (initial content).
+                segmentation_explanation_textbox = gr.Markdown(label="Segmentation Summary Report") 
+            
+            with gr.Row():
+                # Markdown should only use 'label' or 'value' (initial content).
+                confidence_explanation_textbox = gr.Markdown(label="AI Confidence Assessment")
+            
             # --- ROW 3: Visual Explanations (Trust Maps) ---
             gr.Markdown("### Visual Trust Maps")
             
