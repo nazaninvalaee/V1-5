@@ -2,7 +2,7 @@ import numpy as np
 import cv2 as cv
 
 
-def reduce_2d_corrected(data1, data2, axis):
+def reduce_2d(data1, data2, axis):
     """
     Removes black (all-zero, or constant-value) slices from the beginning and end
     along a given axis (0, 1, or 2).
