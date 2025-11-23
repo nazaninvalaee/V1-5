@@ -360,7 +360,7 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     xai_cmap = 'hot'
     
     if selected_xai_method == "Regions of Influence":
-        xai_heatmap = generate_grad_cam_for_class(model_for_gradcam, input_image_batch, target_class_idx, layer_name='conv2d_10') # Assuming a late conv layer
+        xai_heatmap = generate_grad_cam_for_class(model_for_gradcam, input_image_batch, target_class_idx, layer_name='gradcam_target_conv')
     elif selected_xai_method == "Feature Sensitivity":
         xai_heatmap = integrated_gradients(model_for_gradcam, input_image_batch, target_class_idx)
         xai_cmap = 'plasma'
