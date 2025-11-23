@@ -27,7 +27,7 @@ MIN_PIXELS_FOR_ANALYSIS = 1000
 POOR_PERFORMANCE_DICE_THRESHOLD = 0.65 
 MC_SAMPLES = 25
 
-# Standardized Class names
+# Standardized Class names (DGM included, CC removed)
 CLASS_NAMES = {
     0: "Background",
     1: "Cerebellum (CB)",
@@ -46,7 +46,7 @@ CLINICAL_XAI_METHODS = {
 }
 
 
-# --- Core Prediction Logic (No Change) ---
+# --- Core Prediction Logic ---
 def predict_with_mc_dropout_and_attention(model_path, input_image_batch, num_samples=MC_SAMPLES, num_classes=NUM_CLASSES):
     if not isinstance(input_image_batch, tf.Tensor):
         input_image_batch = tf.constant(input_image_batch, dtype=tf.float32)
@@ -74,8 +74,9 @@ def predict_with_mc_dropout_and_attention(model_path, input_image_batch, num_sam
     return mean_prediction, uncertainty_map, averaged_attention_map
 
 
-# --- Helper Functions (Metrics, Grad-CAM, Overlay, etc. - No Change) ---
+# --- Helper Functions (Metrics, Grad-CAM, Overlay, etc.) ---
 def dice_coefficient(mask1, mask2):
+    """Calculates the Dice Coefficient using binary (0/1) masks."""
     intersection = np.sum(mask1 * mask2)
     return (2. * intersection) / (np.sum(mask1) + np.sum(mask2) + 1e-10) 
 
@@ -145,7 +146,8 @@ def overlay_heatmap(original_image_2d, heatmap, cmap='hot', alpha=0.5):
     overlay = cv2.addWeighted(img_rgb, 1 - alpha, cmap_img, alpha, 0)
     return overlay
 
-# --- Semantic Explanation Functions (No Change) ---
+
+# --- Semantic Explanation Functions ---
 def generate_segmentation_explanation(predicted_mask, class_names_map, min_pixels):
     unique_classes = np.unique(predicted_mask)
     explanation = "### Anatomical Report\n\nBased on its analysis of this image slice, the AI model has identified the following structures:\n\n"
@@ -273,14 +275,20 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     predicted_mask_full = np.argmax(mean_prediction, axis=-1)
 
     # 4. Mask Preparation and Metrics
-    # These comparisons now rely on the corrected integer ground_truth_label
-    gt_mask_for_class = (ground_truth_label == target_class_idx).astype(np.uint8) * 255
-    predicted_mask_for_class = (predicted_mask_full == target_class_idx).astype(np.uint8) * 255
+    
+    # FIX: Create binary masks (0 or 1) for accurate metric calculation
+    gt_binary = (ground_truth_label == target_class_idx).astype(np.uint8)
+    predicted_binary = (predicted_mask_full == target_class_idx).astype(np.uint8)
+    
+    # Create Display Masks (0 or 255) for visualization purposes
+    gt_mask_for_class = gt_binary * 255
+    predicted_mask_for_class = predicted_binary * 255
 
-    dice_score = dice_coefficient(predicted_mask_for_class, gt_mask_for_class)
+    # Calculate Dice Score using the 0/1 masks
+    dice_score = dice_coefficient(predicted_binary, gt_binary)
     
     # 5. Status and Quality Check
-    gt_pixel_count = np.sum(gt_mask_for_class)
+    gt_pixel_count = np.sum(gt_binary) # Use binary mask to count pixels
     status = f"Quality Check Score (Dice Coefficient): **{dice_score:.3f}**"
     if gt_pixel_count > MIN_PIXELS_FOR_ANALYSIS and dice_score < POOR_PERFORMANCE_DICE_THRESHOLD:
         status += " ⚠️ **Requires Radiologist Review (Score Below 0.65)**"
@@ -324,7 +332,7 @@ def explain_segmentation_clinical(volume_name, slice_idx, target_class_display_n
     )
 
 
-# --- Gradio Interface Layout using gr.Blocks (No Change) ---
+# --- Gradio Interface Layout using gr.Blocks ---
 with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinical_demo:
     gr.Markdown("# 🧠 Fetal Brain Segmentation Review Tool")
     gr.Markdown("Tool for Radiologists/Clinicians to verify AI segmentations and assess confidence.")
@@ -365,7 +373,7 @@ with gr.Blocks(title="Fetal Brain Segmentation Clinical Review 🧠") as clinica
             influence_explanation_textbox = gr.Markdown(label="Influence Map Explanation")
 
 
-    # --- Event Listeners (No Change) ---
+    # --- Event Listeners ---
     volume_dropdown.change(fn=get_max_slices, inputs=volume_dropdown, outputs=slice_slider, queue=False)
     
     submit_btn.click(
