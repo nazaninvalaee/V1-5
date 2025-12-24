@@ -198,4 +198,4 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     )
 
 # CORRECTED: No theme in launch
-demo.launch(debug=True)
+demo.launch(share=True, debug=True)
