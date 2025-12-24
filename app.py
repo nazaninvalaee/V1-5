@@ -67,19 +67,39 @@ def load_models():
     return m_attn, m_grad
 
 def get_grad_cam(model, img_batch, class_idx):
+    # 1. Define the Grad-CAM Model
     grad_model = tf.keras.models.Model(
         inputs=[model.inputs],
         outputs=[model.get_layer('gradcam_target_conv').output, model.get_layer('logits_output').output]
     )
+    
+    # 2. Record gradients
     with tf.GradientTape() as tape:
         conv_outputs, logits = grad_model(img_batch)
         loss = tf.reduce_sum(logits[:, :, :, class_idx])
+    
+    # 3. Compute importance weights
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    
+    # 4. Generate the weighted heatmap
     heatmap = conv_outputs[0] @ pooled_grads[..., tf.newaxis]
-    heatmap = tf.maximum(heatmap, 0)
-    return cv2.resize(heatmap.numpy(), (256, 256))
-
+    heatmap = tf.squeeze(tf.maximum(heatmap, 0)) # ReLU logic
+    
+    # 5. FIX: Upsample and Normalize
+    heatmap = cv2.resize(heatmap.numpy(), (256, 256))
+    heatmap /= (np.max(heatmap) + 1e-10)
+    
+    # 6. FIX: Masking (The "Clinical Clean-up")
+    # We use the model's prediction to zero out heatmap noise in the background
+    pred_probs = model.predict(img_batch)[0]
+    pred_mask = (np.argmax(pred_probs, axis=-1) == class_idx).astype(np.float32)
+    
+    # Clean the heatmap by multiplying it with the prediction mask
+    cleaned_heatmap = heatmap * pred_mask
+    
+    return cleaned_heatmap
+    
 def get_integrated_gradients(model, img_batch, class_idx, steps=50):
     logits_model = tf.keras.models.Model(inputs=model.inputs, outputs=model.get_layer('logits_output').output)
     baseline = tf.zeros_like(img_batch)
