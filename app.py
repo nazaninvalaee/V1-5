@@ -166,8 +166,8 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
 all_files, _ = cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0)
 volume_names_map = {os.path.basename(p[0]): p for p in all_files}
 
-# Fixed: Variable assignments for mri_out, pred_out, etc.
-with gr.Blocks() as demo:
+# CORRECTED: Theme inside gr.Blocks, variables defined before click
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🧠 Fetal Brain Clinical Intelligence Portal")
     with gr.Sidebar():
         gr.Markdown("### ⚙️ View Settings")
@@ -182,14 +182,14 @@ with gr.Blocks() as demo:
         with gr.Column(scale=2):
             with gr.Tabs():
                 with gr.TabItem("🏥 Clinical Review"):
-                    mri_out = gr.Image(label="Raw MRI") # Variable defined!
-                    pred_out = gr.Image(label="AI Segmentation") # Variable defined!
+                    mri_out = gr.Image(label="Raw MRI")
+                    pred_out = gr.Image(label="AI Segmentation")
                 with gr.TabItem("🔍 AI Focus (XAI)"):
-                    xai_out = gr.Image(label="Explainability Map") # Variable defined!
+                    xai_out = gr.Image(label="Explainability Map")
         with gr.Column(scale=1):
             gr.Markdown("### 📊 AI Quality & Interpretation")
-            status_out = gr.Markdown() # Variable defined!
-            report_out = gr.Markdown() # Variable defined!
+            status_out = gr.Markdown()
+            report_out = gr.Markdown()
 
     btn.click(
         run_clinical_suite, 
@@ -197,5 +197,5 @@ with gr.Blocks() as demo:
         outputs=[mri_out, pred_out, xai_out, status_out, report_out]
     )
 
-# Fix for Gradio 6.0 warning: theme moved to launch
-demo.launch(theme=gr.themes.Soft(), debug=True)
+# CORRECTED: No theme in launch
+demo.launch(debug=True)
