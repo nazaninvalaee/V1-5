@@ -9,7 +9,8 @@ import functools
 import io
 from PIL import Image
 
-# --- External Imports (Ensure these files are in your directory) ---
+# --- External Imports ---
+# Ensure these files are in your /content/V1-5/ directory
 from ensem_4_mod_4_no_mod import create_model
 import create_dataset as cd
 from create_dataset import preprocess_slice
@@ -35,29 +36,28 @@ CLASS_COLORS = {
 # --- 2. THE DUAL-EXPLANATION DICTIONARY ---
 XAI_INFO = {
     "Gradient-weighted Class Activation Mapping": {
-        "simple": "A 'heat map' showing the general area the AI prioritized. If the heat is on the structure, the AI is likely correct.",
+        "simple": "A 'heat map' showing where the AI prioritized its attention. Bright spots indicate high importance.",
         "technical": "Grad-CAM: Computes the gradients of the class score with respect to the feature maps of the final convolutional layer."
     },
     "Integrated Gradients": {
-        "simple": "Think of this as an 'evidence map.' It highlights the sharp edges and textures that the AI used as proof for its choice.",
+        "simple": "An 'evidence map' highlighting the exact textures and edges that influenced the AI's final decision.",
         "technical": "Attribution via Path Integral: Computes the average gradient of the output along a linear path from a baseline to the input."
     },
     "Intrinsic Attention Map Analysis": {
-        "simple": "The AI's 'internal focus.' It shows which parts of the whole image the model deemed relevant before looking at specifics.",
+        "simple": "The AI's 'internal focus,' showing which global areas the model deemed relevant before looking at details.",
         "technical": "Extracts self-attention coefficients from the U-Net skip-connections, showing global spatial dependencies."
     },
     "Filter Activation Visualization": {
-        "simple": "A look at the AI's 'building blocks.' These images show how the AI breaks the MRI down into basic shapes and lines.",
+        "simple": "A look at the AI's 'neurons'—it shows how the model breaks the MRI down into basic shapes like lines and curves.",
         "technical": "Intermediate Feature Visualization: Displays the output of the first Conv2D layer (8 filters) to visualize feature extraction."
     },
     "Uncertainty Estimation via Monte Carlo Dropout": {
-        "simple": "The 'Doubt Map.' Brighter areas mean the AI is unsure. These are the spots a doctor should look at most closely.",
-        "technical": "Predictive Entropy ($H$): Quantifies the variance across multiple stochastic forward passes to estimate model uncertainty."
+        "simple": "A 'Doubt Map.' Brighter areas mean the AI is unsure; these spots should be manually reviewed by a doctor.",
+        "technical": "Predictive Entropy ($H$): Quantifies the variance across 25 forward passes to estimate model uncertainty."
     }
 }
 
 # --- 3. XAI CORE FUNCTIONS ---
-
 @functools.lru_cache(maxsize=1)
 def load_models():
     m_attn = create_model(num_classes=NUM_CLASSES, return_attention_map=True)
@@ -109,11 +109,8 @@ def get_filter_viz(model, img_batch):
     return Image.open(buf)
 
 # --- 4. MAIN INTERFACE WRAPPER ---
-
 def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_val):
     model_attn, model_grad = load_models()
-    
-    # Data Loading
     paths = volume_names_map[volume_name]
     img_vol = nib.load(paths[0]).get_fdata()
     lbl_vol = nib.load(paths[1]).get_fdata() if paths[1] else None
@@ -125,7 +122,6 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
     img_batch = tf.expand_dims(tf.constant(processed_img, dtype=tf.float32), axis=0)
     class_idx = [k for k, v in CLASS_NAMES.items() if v == target_class][0]
 
-    # MC Dropout Prediction
     preds, attns = [], []
     for _ in range(MC_SAMPLES):
         p, _, a = model_attn(img_batch, training=True)
@@ -135,17 +131,14 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
     mean_pred = np.mean(preds, axis=0).squeeze()
     pred_mask = np.argmax(mean_pred, axis=-1)
     
-    # Visualization Prep
     mri_display = (processed_img.squeeze() * 255).astype(np.uint8)
     mri_rgb = cv2.cvtColor(mri_display, cv2.COLOR_GRAY2RGB)
     
-    # Prediction Overlay
     color = CLASS_COLORS.get(class_idx, [0, 255, 0])
     colored_mask = np.zeros_like(mri_rgb)
     colored_mask[pred_mask == class_idx] = color
     pred_overlay = cv2.addWeighted(mri_rgb, 1.0, colored_mask, alpha_val, 0)
     
-    # XAI Logic
     if xai_method == "Gradient-weighted Class Activation Mapping":
         hm = get_grad_cam(model_grad, img_batch, class_idx)
         xai_res = cv2.addWeighted(mri_rgb, 0.6, (plt.get_cmap('hot')(hm)[:,:,:3]*255).astype(np.uint8), 0.4, 0)
@@ -158,22 +151,23 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
         xai_res = cv2.addWeighted(mri_rgb, 0.5, (plt.get_cmap('magma')(hm)[:,:,:3]*255).astype(np.uint8), 0.5, 0)
     elif xai_method == "Filter Activation Visualization":
         xai_res = get_filter_viz(model_grad, img_batch)
-    else: # Attention Map
+    else: 
         attn_avg = np.mean(attns, axis=0).squeeze()
         hm = (attn_avg - attn_avg.min()) / (attn_avg.max() - attn_avg.min() + 1e-10)
         xai_res = cv2.addWeighted(mri_rgb, 0.6, (plt.get_cmap('viridis')(hm)[:,:,:3]*255).astype(np.uint8), 0.4, 0)
 
     dice = (2. * np.sum((pred_mask==class_idx)*(processed_gt==class_idx))) / (np.sum(pred_mask==class_idx)+np.sum(processed_gt==class_idx)+1e-10)
-    status_msg = f"### Structure Quality: {dice:.2f}\n" + ("✅ Validated" if dice > 0.7 else "🚨 Review Needed")
-    report = f"### 🧠 How to read this output\n\n**Patient-Friendly:** {XAI_INFO[xai_method]['simple']}\n\n**Expert Reference:** {XAI_INFO[xai_method]['technical']}"
+    status_msg = f"### Structure Quality (Dice): {dice:.2f}\n" + ("✅ Validated" if dice > 0.7 else "🚨 Review Needed")
+    report = f"### 💡 Interpretation\n\n**Patient-Friendly:** {XAI_INFO[xai_method]['simple']}\n\n**Expert Reference:** {XAI_INFO[xai_method]['technical']}"
 
     return mri_display, pred_overlay, xai_res, status_msg, report
 
-# --- 5. DATA SETUP & LAUNCH ---
+# --- 5. DATA SETUP & UI ---
 all_files, _ = cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, n=-1, s=0)
 volume_names_map = {os.path.basename(p[0]): p for p in all_files}
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+# Fixed: Variable assignments for mri_out, pred_out, etc.
+with gr.Blocks() as demo:
     gr.Markdown("# 🧠 Fetal Brain Clinical Intelligence Portal")
     with gr.Sidebar():
         gr.Markdown("### ⚙️ View Settings")
@@ -188,15 +182,20 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         with gr.Column(scale=2):
             with gr.Tabs():
                 with gr.TabItem("🏥 Clinical Review"):
-                    gr.Image(label="Raw MRI", elem_id="mri_img") # Out 1
-                    gr.Image(label="AI Segmentation", elem_id="pred_img") # Out 2
+                    mri_out = gr.Image(label="Raw MRI") # Variable defined!
+                    pred_out = gr.Image(label="AI Segmentation") # Variable defined!
                 with gr.TabItem("🔍 AI Focus (XAI)"):
-                    gr.Image(label="Explainability Map") # Out 3
+                    xai_out = gr.Image(label="Explainability Map") # Variable defined!
         with gr.Column(scale=1):
             gr.Markdown("### 📊 AI Quality & Interpretation")
-            status_out = gr.Markdown() # Out 4
-            report_out = gr.Markdown() # Out 5
+            status_out = gr.Markdown() # Variable defined!
+            report_out = gr.Markdown() # Variable defined!
 
-    btn.click(run_clinical_suite, [vol_in, slc_in, cls_in, xai_in, alp_in], [mri_out, pred_out, xai_out, status_out, report_out])
+    btn.click(
+        run_clinical_suite, 
+        inputs=[vol_in, slc_in, cls_in, xai_in, alp_in], 
+        outputs=[mri_out, pred_out, xai_out, status_out, report_out]
+    )
 
-demo.launch()
+# Fix for Gradio 6.0 warning: theme moved to launch
+demo.launch(theme=gr.themes.Soft(), debug=True)
