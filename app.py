@@ -66,26 +66,33 @@ def load_models():
     return m_attn, m_grad
 
 def overlay_heatmap(background_rgb, heatmap, cmap_name='hot', alpha=0.4):
-    """Helper to safely blend heatmaps with background MRI."""
-    heatmap = np.nan_to_num(heatmap)
+    """Safely normalizes, colorizes, and resizes heatmaps for blending."""
+    # 1. Clean data and normalize
+    heatmap = np.nan_to_num(heatmap.squeeze())
     if heatmap.max() > 0:
-        heatmap = heatmap / heatmap.max()
+        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-10)
     
-    # Apply colormap and convert to 8-bit RGB
-    colored_hm = (plt.get_cmap(cmap_name)(heatmap)[:, :, :3] * 255).astype(np.uint8)
-    # Ensure resize matches background exactly
-    colored_hm = cv2.resize(colored_hm, (background_rgb.shape[1], background_rgb.shape[0]))
+    # 2. Resize heatmap to match background dimensions (H, W)
+    heatmap_resized = cv2.resize(heatmap, (background_rgb.shape[1], background_rgb.shape[0]))
+    
+    # 3. Apply colormap
+    colored_hm = plt.get_cmap(cmap_name)(heatmap_resized)[:, :, :3]
+    colored_hm = (colored_hm * 255).astype(np.uint8)
+    
+    # 4. Blend
     return cv2.addWeighted(background_rgb, 1 - alpha, colored_hm, alpha, 0)
 
 def get_grad_cam(model, img_batch, class_idx):
     grad_model = tf.keras.models.Model(
         inputs=[model.inputs], 
-        outputs=[model.get_layer('gradcam_target_conv').output, model.get_layer('logits_output').output]
+        outputs=[model.get_layer('gradcam_target_conv').output, model.output]
     )
     with tf.GradientTape() as tape:
-        conv_outputs, logits = grad_model(img_batch)
-        # Ensure logits is treated as a tensor
-        loss = tf.reduce_sum(tf.convert_to_tensor(logits)[..., class_idx])
+        conv_outputs, predictions = grad_model(img_batch)
+        # Handle if model returns list
+        if isinstance(predictions, list): predictions = predictions[0]
+        loss = predictions[:, :, :, class_idx]
+        
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
     heatmap = (conv_outputs[0] @ pooled_grads[..., tf.newaxis]).numpy()
@@ -100,9 +107,8 @@ def get_integrated_gradients(model, img_batch, class_idx, m_steps=20):
     with tf.GradientTape() as tape:
         tape.watch(interpolated)
         logits = model(interpolated)
-        # Handle multi-output models by ensuring we have the tensor
-        logits_tensor = tf.convert_to_tensor(logits)
-        loss = logits_tensor[..., class_idx]
+        if isinstance(logits, list): logits = logits[0]
+        loss = logits[..., class_idx]
     
     grads = tape.gradient(loss, interpolated)
     avg_grads = tf.reduce_mean((grads[:-1] + grads[1:]) / 2.0, axis=0)
@@ -140,9 +146,9 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
     img_batch = tf.expand_dims(tf.constant(processed_img, dtype=tf.float32), axis=0)
     class_idx = [k for k, v in CLASS_NAMES.items() if v == target_class][0]
 
+    # Inference with MC Dropout
     preds, attns = [], []
     for _ in range(MC_SAMPLES):
-        # Unpack outputs carefully
         out = model_attn(img_batch, training=True)
         preds.append(out[0].numpy()) 
         attns.append(out[2].numpy())
@@ -162,7 +168,7 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
     gt_overlay = apply_overlay(mri_rgb, (processed_gt == class_idx), [255, 165, 0], alpha_val)
     pred_overlay = apply_overlay(mri_rgb, (pred_mask == class_idx), CLASS_COLORS.get(class_idx, [0, 255, 0]), alpha_val)
 
-    # Logic for XAI with new robust helper
+    # XAI Logic
     if xai_method == "Filter Activation Visualization":
         xai_res = get_filter_viz(model_grad, img_batch)
     elif xai_method == "Gradient-weighted Class Activation Mapping":
@@ -175,7 +181,6 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
         unc = -np.sum(mean_pred * np.log(mean_pred + 1e-10), axis=-1)
         xai_res = overlay_heatmap(mri_rgb, unc, 'magma', alpha=0.5)
     else: # Intrinsic Attention
-        # Extract mean attention across samples and heads
         attn_map = np.mean(attns, axis=0).squeeze()
         if attn_map.ndim > 2: attn_map = np.mean(attn_map, axis=-1)
         xai_res = overlay_heatmap(mri_rgb, attn_map, 'viridis')
@@ -193,7 +198,7 @@ all_files = cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, -1, 0)[0]
 volume_names_map = {os.path.basename(p[0]): p for p in all_files}
 
 with gr.Blocks(title="Fetal Brain Clinical Station") as demo:
-    gr.Markdown("# 🧠 Fetal Brain Clinical Station V2.8")
+    gr.Markdown("# 🧠 Fetal Brain Clinical Station V2.9")
     with gr.Sidebar():
         vol_in = gr.Dropdown(list(volume_names_map.keys()), label="Patient Volume")
         slc_in = gr.Slider(0, 100, step=1, label="Slice Index")
