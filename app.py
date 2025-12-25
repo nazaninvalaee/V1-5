@@ -34,24 +34,24 @@ CLASS_COLORS = {
 
 XAI_INFO = {
     "Gradient-weighted Class Activation Mapping": {
-        "simple": "A 'heat map' showing the general area the AI prioritized. If the heat is on the structure, the AI is likely correct.",
-        "technical": "Grad-CAM: Computes the gradients of the class score with respect to the feature maps of the final convolutional layer."
+        "simple": "A 'heat map' showing the general area the AI prioritized.",
+        "technical": "Grad-CAM: Gradients of the class score w.r.t. the final conv layer."
     },
     "Integrated Gradients": {
-        "simple": "Think of this as an 'evidence map.' It highlights the sharp edges and textures that the AI used as proof for its choice.",
-        "technical": "Attribution via Path Integral: Computes the average gradient of the output along a linear path from a baseline to the input."
+        "simple": "An 'evidence map' highlighting sharp edges and textures used as proof.",
+        "technical": "Path Integral: Average gradient along a path from baseline to input."
     },
     "Intrinsic Attention Map Analysis": {
-        "simple": "The AI's 'internal focus.' It shows which parts of the whole image the model deemed relevant before looking at specifics.",
-        "technical": "Extracts self-attention coefficients from the U-Net skip-connections, showing global spatial dependencies."
+        "simple": "The AI's 'internal focus' from the model's own Attention Gates.",
+        "technical": "Skip-connection attention coefficients showing spatial dependencies."
     },
     "Filter Activation Visualization": {
-        "simple": "A look at the AI's 'building blocks.' These images show how the AI breaks the MRI down into basic shapes and lines.",
-        "technical": "Intermediate Feature Visualization: Displays the output of the first Conv2D layer (8 filters) to visualize feature extraction."
+        "simple": "Shows how the AI breaks the MRI down into basic shapes and lines.",
+        "technical": "Displays the first Conv2D layer output (8 filters)."
     },
     "Uncertainty Estimation via Monte Carlo Dropout": {
-        "simple": "The 'Doubt Map.' Brighter areas mean the AI is unsure. These are the spots a doctor should look at most closely.",
-        "technical": "Predictive Entropy ($H$): Quantifies the variance across multiple stochastic forward passes to estimate model uncertainty."
+        "simple": "The 'Doubt Map.' Brighter areas mean the AI is unsure.",
+        "technical": "Predictive Entropy: Variance across stochastic forward passes."
     }
 }
 
@@ -65,6 +65,18 @@ def load_models():
     m_grad.load_weights(TRAINED_MODEL_PATH)
     return m_attn, m_grad
 
+def overlay_heatmap(background_rgb, heatmap, cmap_name='hot', alpha=0.4):
+    """Helper to safely blend heatmaps with background MRI."""
+    heatmap = np.nan_to_num(heatmap)
+    if heatmap.max() > 0:
+        heatmap = heatmap / heatmap.max()
+    
+    # Apply colormap and convert to 8-bit RGB
+    colored_hm = (plt.get_cmap(cmap_name)(heatmap)[:, :, :3] * 255).astype(np.uint8)
+    # Ensure resize matches background exactly
+    colored_hm = cv2.resize(colored_hm, (background_rgb.shape[1], background_rgb.shape[0]))
+    return cv2.addWeighted(background_rgb, 1 - alpha, colored_hm, alpha, 0)
+
 def get_grad_cam(model, img_batch, class_idx):
     grad_model = tf.keras.models.Model(
         inputs=[model.inputs], 
@@ -72,26 +84,30 @@ def get_grad_cam(model, img_batch, class_idx):
     )
     with tf.GradientTape() as tape:
         conv_outputs, logits = grad_model(img_batch)
-        loss = tf.reduce_sum(logits[:, :, :, class_idx])
+        # Ensure logits is treated as a tensor
+        loss = tf.reduce_sum(tf.convert_to_tensor(logits)[..., class_idx])
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
     heatmap = (conv_outputs[0] @ pooled_grads[..., tf.newaxis]).numpy()
-    return cv2.resize(np.maximum(heatmap, 0), (256, 256))
+    return np.maximum(heatmap, 0)
 
 def get_integrated_gradients(model, img_batch, class_idx, m_steps=20):
     image = tf.cast(img_batch[0], tf.float32)
     baseline = tf.zeros_like(image)
     alphas = tf.linspace(0.0, 1.0, m_steps + 1)
     interpolated = baseline + alphas[:, tf.newaxis, tf.newaxis, tf.newaxis] * (image - baseline)
+    
     with tf.GradientTape() as tape:
         tape.watch(interpolated)
         logits = model(interpolated)
-        loss = logits[..., class_idx]
+        # Handle multi-output models by ensuring we have the tensor
+        logits_tensor = tf.convert_to_tensor(logits)
+        loss = logits_tensor[..., class_idx]
+    
     grads = tape.gradient(loss, interpolated)
     avg_grads = tf.reduce_mean((grads[:-1] + grads[1:]) / 2.0, axis=0)
     ig = (image - baseline) * avg_grads
-    hm = np.abs(ig).sum(axis=-1)
-    return (hm - hm.min()) / (hm.max() - hm.min() + 1e-10)
+    return np.abs(ig).sum(axis=-1)
 
 def get_filter_viz(model, img_batch):
     first_conv = next(l for l in model.layers if isinstance(l, tf.keras.layers.Conv2D))
@@ -126,64 +142,65 @@ def run_clinical_suite(volume_name, slice_idx, target_class, xai_method, alpha_v
 
     preds, attns = [], []
     for _ in range(MC_SAMPLES):
-        p, _, a = model_attn(img_batch, training=True)
-        preds.append(p.numpy()); attns.append(a.numpy())
+        # Unpack outputs carefully
+        out = model_attn(img_batch, training=True)
+        preds.append(out[0].numpy()) 
+        attns.append(out[2].numpy())
     
     mean_pred = np.mean(preds, axis=0).squeeze()
     pred_mask = np.argmax(mean_pred, axis=-1)
     mri_display = (processed_img.squeeze() * 255).astype(np.uint8)
     mri_rgb = cv2.cvtColor(mri_display, cv2.COLOR_GRAY2RGB)
     
-    def create_clinical_overlay(bg, mask, color, alpha):
+    def apply_overlay(bg, mask, color, alpha):
         overlay = bg.copy()
         if mask.sum() > 0:
-            color_array = np.tile(np.array(color, dtype=np.uint8), (mask.sum(), 1))
-            overlay[mask] = cv2.addWeighted(overlay[mask], 1 - alpha, color_array, alpha, 0).squeeze()
+            color_arr = np.tile(np.array(color, dtype=np.uint8), (mask.sum(), 1))
+            overlay[mask] = cv2.addWeighted(overlay[mask], 1 - alpha, color_arr, alpha, 0).squeeze()
         return overlay
 
-    gt_overlay = create_clinical_overlay(mri_rgb, (processed_gt == class_idx), [255, 165, 0], alpha_val)
-    pred_overlay = create_clinical_overlay(mri_rgb, (pred_mask == class_idx), CLASS_COLORS.get(class_idx, [0, 255, 0]), alpha_val)
+    gt_overlay = apply_overlay(mri_rgb, (processed_gt == class_idx), [255, 165, 0], alpha_val)
+    pred_overlay = apply_overlay(mri_rgb, (pred_mask == class_idx), CLASS_COLORS.get(class_idx, [0, 255, 0]), alpha_val)
 
+    # Logic for XAI with new robust helper
     if xai_method == "Filter Activation Visualization":
         xai_res = get_filter_viz(model_grad, img_batch)
     elif xai_method == "Gradient-weighted Class Activation Mapping":
         hm = get_grad_cam(model_grad, img_batch, class_idx)
-        xai_res = cv2.addWeighted(mri_rgb, 0.6, (plt.get_cmap('hot')(hm/hm.max())[:,:,:3]*255).astype(np.uint8), 0.4, 0)
+        xai_res = overlay_heatmap(mri_rgb, hm, 'hot')
     elif xai_method == "Integrated Gradients":
         hm = get_integrated_gradients(model_grad, img_batch, class_idx)
-        xai_res = cv2.addWeighted(mri_rgb, 0.6, (plt.get_cmap('hot')(hm)[:,:,:3]*255).astype(np.uint8), 0.4, 0)
+        xai_res = overlay_heatmap(mri_rgb, hm, 'hot')
     elif xai_method == "Uncertainty Estimation via Monte Carlo Dropout":
         unc = -np.sum(mean_pred * np.log(mean_pred + 1e-10), axis=-1)
-        hm = (unc - unc.min()) / (unc.max() - unc.min() + 1e-10)
-        xai_res = cv2.addWeighted(mri_rgb, 0.5, (plt.get_cmap('magma')(hm)[:,:,:3]*255).astype(np.uint8), 0.5, 0)
+        xai_res = overlay_heatmap(mri_rgb, unc, 'magma', alpha=0.5)
     else: # Intrinsic Attention
-        attn_mean = np.mean(attns, axis=0).squeeze()
-        hm = cv2.resize(attn_mean, (256, 256))
-        xai_res = cv2.addWeighted(mri_rgb, 0.6, (plt.get_cmap('viridis')(hm/hm.max())[:,:,:3]*255).astype(np.uint8), 0.4, 0)
+        # Extract mean attention across samples and heads
+        attn_map = np.mean(attns, axis=0).squeeze()
+        if attn_map.ndim > 2: attn_map = np.mean(attn_map, axis=-1)
+        xai_res = overlay_heatmap(mri_rgb, attn_map, 'viridis')
 
     dice = (2. * np.sum((pred_mask==class_idx)*(processed_gt==class_idx))) / (np.sum(pred_mask==class_idx)+np.sum(processed_gt==class_idx)+1e-10)
-    status_msg = f"### Structure Dice: {dice:.2f}\n" + ("✅ Validated" if dice > 0.65 else "🚨 Manual Review Required")
+    status = f"### Structure Dice: {dice:.2f}\n" + ("✅ Validated" if dice > 0.65 else "🚨 Manual Review Required")
     
     info = XAI_INFO[xai_method]
-    report_text = f"### 💡 AI Interpretation\n\n**Patient-Friendly:** {info['simple']}\n\n**Technical:** {info['technical']}"
+    report = f"### 💡 AI Interpretation\n\n**Simple:** {info['simple']}\n\n**Technical:** {info['technical']}"
     
-    return mri_display, gt_overlay, pred_overlay, xai_res, status_msg, report_text
+    return mri_display, gt_overlay, pred_overlay, xai_res, status, report
 
 # --- 4. DATA SETUP & UI ---
-# FIXED: Using positional arguments to avoid 'unexpected keyword argument' errors
 all_files = cd.create_dataset(PATH_INPUT_VOLUMES, PATH_LABEL_VOLUMES, -1, 0)[0]
 volume_names_map = {os.path.basename(p[0]): p for p in all_files}
 
 with gr.Blocks(title="Fetal Brain Clinical Station") as demo:
-    gr.Markdown("# 🧠 Fetal Brain Clinical Station V2.7")
-    
+    gr.Markdown("# 🧠 Fetal Brain Clinical Station V2.8")
     with gr.Sidebar():
         vol_in = gr.Dropdown(list(volume_names_map.keys()), label="Patient Volume")
         slc_in = gr.Slider(0, 100, step=1, label="Slice Index")
         cls_in = gr.Dropdown(list(CLASS_NAMES.values())[1:], label="Structure", value="Cerebellum (CB)")
         xai_in = gr.Radio(list(XAI_INFO.keys()), label="XAI Suite", value="Gradient-weighted Class Activation Mapping")
         alp_in = gr.Slider(0.1, 1.0, value=0.6, label="Overlay Opacity")
-        btn = gr.Button("Run Analysis", variant="primary")
+        btn = gr.Button("Analyze Slice", variant="primary")
 
     with gr.Row():
         with gr.Column(scale=4):
@@ -195,13 +212,9 @@ with gr.Blocks(title="Fetal Brain Clinical Station") as demo:
                         pred_out = gr.Image(label="3. AI Prediction")
                 with gr.TabItem("🔍 Explainability (XAI)"):
                     xai_out = gr.Image(label="XAI Visualization")
-        
         with gr.Column(scale=1):
-            status_out = gr.Markdown()
-            report_out = gr.Markdown()
+            status_out = gr.Markdown(); report_out = gr.Markdown()
 
-    btn.click(run_clinical_suite, 
-              [vol_in, slc_in, cls_in, xai_in, alp_in], 
-              [mri_out, gt_out, pred_out, xai_out, status_out, report_out])
+    btn.click(run_clinical_suite, [vol_in, slc_in, cls_in, xai_in, alp_in], [mri_out, gt_out, pred_out, xai_out, status_out, report_out])
 
 demo.launch(theme=gr.themes.Soft(), share=True)
